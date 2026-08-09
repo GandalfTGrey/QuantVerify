@@ -27,7 +27,8 @@ class NormalizedBar(DomainModel):
 
     asset: AssetId
     session: date
-    event_at: datetime
+    session_open_at: datetime
+    session_close_at: datetime
     available_at: datetime
     open: PositiveDecimal
     high: PositiveDecimal
@@ -38,10 +39,13 @@ class NormalizedBar(DomainModel):
 
     @model_validator(mode="after")
     def validate_market_semantics(self) -> NormalizedBar:
-        if self.event_at.tzinfo is None or self.available_at.tzinfo is None:
-            raise ValueError("event_at and available_at must be timezone-aware")
-        if self.available_at < self.event_at:
-            raise ValueError("available_at cannot be earlier than event_at")
+        timestamps = (self.session_open_at, self.session_close_at, self.available_at)
+        if any(timestamp.tzinfo is None for timestamp in timestamps):
+            raise ValueError("session and availability timestamps must be timezone-aware")
+        if self.session_open_at >= self.session_close_at:
+            raise ValueError("session_open_at must be earlier than session_close_at")
+        if self.available_at < self.session_close_at:
+            raise ValueError("available_at cannot be earlier than session_close_at")
         if self.high < self.low:
             raise ValueError("high must be greater than or equal to low")
         if not self.low <= self.open <= self.high:

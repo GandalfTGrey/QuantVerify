@@ -20,13 +20,15 @@ def make_bar(
     source: str,
     asset: AssetId = ASSET,
 ) -> NormalizedBar:
-    event_at = datetime(session.year, session.month, session.day, 21, tzinfo=UTC)
+    session_open_at = datetime(session.year, session.month, session.day, 14, 30, tzinfo=UTC)
+    session_close_at = datetime(session.year, session.month, session.day, 21, tzinfo=UTC)
     close_value = Decimal(close)
     return NormalizedBar(
         asset=asset,
         session=session,
-        event_at=event_at,
-        available_at=event_at + timedelta(minutes=5),
+        session_open_at=session_open_at,
+        session_close_at=session_close_at,
+        available_at=session_close_at + timedelta(minutes=5),
         open=close_value,
         high=close_value,
         low=close_value,
@@ -39,13 +41,15 @@ def make_bar(
 class NormalizedBarTests(TestCase):
     def test_rejects_invalid_ohlc(self) -> None:
         session = date(2026, 1, 2)
-        event_at = datetime(2026, 1, 2, 21, tzinfo=UTC)
+        session_open_at = datetime(2026, 1, 2, 14, 30, tzinfo=UTC)
+        session_close_at = datetime(2026, 1, 2, 21, tzinfo=UTC)
         with self.assertRaisesRegex(ValidationError, "open must be between"):
             NormalizedBar(
                 asset=ASSET,
                 session=session,
-                event_at=event_at,
-                available_at=event_at,
+                session_open_at=session_open_at,
+                session_close_at=session_close_at,
+                available_at=session_close_at,
                 open=Decimal("101"),
                 high=Decimal("100"),
                 low=Decimal("99"),

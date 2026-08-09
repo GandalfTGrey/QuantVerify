@@ -24,13 +24,15 @@
 | Versioned config loader | Done | YAML schema version、strict validation |
 | CI baseline | Done | Python 3.11/3.12、Ruff、mypy、pytest、coverage |
 | 研究守则整合 | Done | Data Integrity、Research Protocol、Strategy Universe |
-| Reference loop、storage | Next | 属于 M0 后半与 M1 |
+| Initial ADR set | Done | precedence、timing、identity、dual-source validation |
+| Golden signal fixture | Done | 手算 SMA3、warm-up、T+1 target、causality regression |
+| Reference engine、storage | Next | M1 的下一条 vertical slice |
 
 ## 3. Milestone 0 — Foundation
 
 目标：冻结首个可编码的研究契约，使后续 adapter 不会各自定义语义。
 
-预计：4-6 engineer-days；当前已完成 M0-01 至 M0-06，M0-07/08 进入下一提交。
+预计：4-6 engineer-days；M0-01 至 M0-08 已完成，等待 CI 通过后退出 M0。
 
 ### 工作包
 
@@ -245,5 +247,5 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 
 - base conda 已确认存在 AkShare 1.18.83、Tushare 1.4.29、pandas 2.2.3、NumPy 2.2.3；
 - 当前环境尚未发现 Tushare token；接入真实 Tushare 数据前需通过 `TUSHARE_TOKEN` 配置，禁止写入 Git；
-- M0 下一步是 ADR 与 golden fixture；随后进入数据双源 adapter 和可信研究闭环；
+- M0 的 ADR 与 golden fixture 已完成；下一步进入 reference engine、metrics 和 immutable artifacts；
 - QQQ 是 Nasdaq-100 ETF，不代表 Nasdaq Composite；若目标实际是 Nasdaq Composite，应把 QQQ 改为 ONEQ 并重新冻结 asset identity。
