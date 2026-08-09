@@ -1,0 +1,30 @@
+schema_version: 1
+universe_id: us_index_etfs_v1
+name: US Nasdaq-100 and Dow Jones ETF proxies
+base_currency: USD
+selection: static
+assets:
+  - asset_id: US_ETF_QQQ
+    symbol: QQQ
+    venue: XNAS
+    asset_class: etf
+    currency: USD
+    underlying: Nasdaq-100 Index
+    return_type: adjusted_total_return_proxy
+  - asset_id: US_ETF_DIA
+    symbol: DIA
+    venue: ARCX
+    asset_class: etf
+    currency: USD
+    underlying: Dow Jones Industrial Average
+    return_type: adjusted_total_return_proxy
+defensive_asset:
+  asset_id: USD_CASH
+  asset_class: cash
+  currency: USD
+  return_policy: explicit
+data_policy:
+  primary: tushare_us_daily_adj
+  secondary: akshare_us_daily
+  conflict_action: fail_or_manual_review
+  derive_weekly_monthly_from_daily: true

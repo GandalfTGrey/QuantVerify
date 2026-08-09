@@ -21,13 +21,16 @@
 | Core domain contracts | Done | 时间、数据、成本、实验、运行、目标仓位 |
 | Stable identity | Done | canonical SHA-256 experiment/run identity |
 | Core unit tests | Done | 身份稳定性、时区、split、因果约束 |
-| CI、reference loop、storage | Next | 属于 M0 后半与 M1 |
+| Versioned config loader | Done | YAML schema version、strict validation |
+| CI baseline | Done | Python 3.11/3.12、Ruff、mypy、pytest、coverage |
+| 研究守则整合 | Done | Data Integrity、Research Protocol、Strategy Universe |
+| Reference loop、storage | Next | 属于 M0 后半与 M1 |
 
 ## 3. Milestone 0 — Foundation
 
 目标：冻结首个可编码的研究契约，使后续 adapter 不会各自定义语义。
 
-预计：4-6 engineer-days；本次已完成约 2-3 天等价范围。
+预计：4-6 engineer-days；当前已完成 M0-01 至 M0-06，M0-07/08 进入下一提交。
 
 ### 工作包
 
@@ -223,23 +226,24 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 11. `engine: reconcile VectorBT adapter against golden results`
 12. `docs: add initial ADR set and research protocol`
 
-## 13. 需要产品负责人确认
+## 13. 已确认的产品与工程决策
 
-以下问题不会阻止 M0，但会影响 M1-M4 的具体实现：
+| ID | 决策 | 当前基线 |
+|---|---|---|
+| D1 | 首期资产 | QQQ（Nasdaq-100 ETF）与 DIA（DJIA ETF） |
+| D2 | 数据源 | Tushare Pro 为主、AkShare 为交叉验证；冲突不静默择一 |
+| D3 | 默认执行 | 日/周/月周期均在 period close 决策，下一交易日开盘执行，lag >= 1 |
+| D4 | 仓位 | long/flat；不做空、不加杠杆、不做多币种，base currency = USD |
+| D5 | 产品形态 | Mac M1 本地单用户 modular monolith |
+| D6 | 研究策略 | 见 `M1_RESEARCH_SCOPE.md` 的五个候选及强制基准 |
+| D7 | Promotion | 暂采用架构默认：先 evidence hard gates，再评分，不固定收益阈值 |
+| D8 | Git 协作 | feature branch + Draft PR，不直接推 main |
+| D9 | 许可 | All rights reserved / proprietary |
+| D10 | 资源预算 | Apple Silicon M1；单批任务允许连续运行约 24 小时 |
 
-| ID | 需要确认的决策 | 建议默认值 | 最晚确认时间 |
-|---|---|---|---|
-| Q1 | 首个目标市场：美股 ETF、A 股、加密资产还是多市场？ | 先用美股 ETF 验证引擎，再做 A 股规则 | M1 开始前 |
-| Q2 | 首个生产数据源及你已有的账号/许可？ | 先用本地 fixture；生产源暂不假设 | M2 开始前 |
-| Q3 | 日线信号默认成交语义？ | close decision -> next open execution，lag >=1 | M1-04 前 |
-| Q4 | 是否需要首期支持做空、杠杆和多币种？ | MVP long/flat、无杠杆、单一 base currency | M1-04 前 |
-| Q5 | 研究结果主要服务个人本地还是近期多用户 Web 产品？ | 本地单用户 modular monolith | M3 前 |
-| Q6 | 你希望优先验证的 3-5 个具体策略是什么？ | SMA crossover 作为工程 fixture，不视为研究优先级 | M2 前 |
-| Q7 | Promotion 的业务目标和风险偏好？ | 先只收集 evidence，不固定收益阈值 | M4 前 |
-| Q8 | 仓库协作方式：直接推 main 还是 feature branch + draft PR？ | feature branch + draft PR | 本次提交前 |
-| Q9 | 项目许可证是开源、私有还是暂未决定？ | 暂标 Proprietary，决定后修改 | 首次公开发布前 |
-| Q10 | 运行预算：本地硬件、可接受时长和月度云预算？ | M1 实测后再设上限 | M3 前 |
+## 14. 当前外部依赖与下一步
 
-## 14. 下一次迭代建议
-
-收到 Q1、Q3、Q4、Q8 的回答后，优先完成 M0-05 至 M0-08，然后立即进入 M1 的 golden research loop。Q2、Q5、Q6 可在 M1 实现期间确认；Q7、Q9、Q10 暂不阻塞可信研究闭环。
+- base conda 已确认存在 AkShare 1.18.83、Tushare 1.4.29、pandas 2.2.3、NumPy 2.2.3；
+- 当前环境尚未发现 Tushare token；接入真实 Tushare 数据前需通过 `TUSHARE_TOKEN` 配置，禁止写入 Git；
+- M0 下一步是 ADR 与 golden fixture；随后进入数据双源 adapter 和可信研究闭环；
+- QQQ 是 Nasdaq-100 ETF，不代表 Nasdaq Composite；若目标实际是 Nasdaq Composite，应把 QQQ 改为 ONEQ 并重新冻结 asset identity。

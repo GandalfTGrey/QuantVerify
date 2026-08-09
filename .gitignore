@@ -15,7 +15,7 @@ dist/
 .vscode/
 
 # Local research data and generated artifacts are never source-controlled.
-data/
-artifacts/
+/data/
+/artifacts/
 *.duckdb
 *.duckdb.wal

@@ -1,6 +1,6 @@
-# Investment Strategy Lab — STRATEGY_UNIVERSE.md
+# QuantVerify — STRATEGY_UNIVERSE.md
 
-> **定位**：本文件维护 Investment Strategy Lab 的“策略宇宙（Strategy Universe）”。  
+> **定位**：本文件维护 QuantVerify 的“策略宇宙（Strategy Universe）”。
 > **用途**：统一策略分类、命名、研究优先级、适用资产、主要参数、外部证据强弱以及潜在失败模式。  
 > **注意**：列入 Strategy Universe **不等于策略有效**。Universe 是研究候选池，不是推荐清单。  
 > **配套协议**：所有正式研究必须执行 `STRATEGY_RESEARCH_PROTOCOL.md` 与 `BACKTEST_DATA_INTEGRITY.md`。
@@ -1976,7 +1976,7 @@ and how robustly?
 
 > **什么策略，在什么资产上、什么市场环境下，以什么风险代价，表现出多稳定的历史规律？**
 
-这应成为整个 Investment Strategy Lab 的核心研究问题。
+这应成为整个 QuantVerify 的核心研究问题。
 
 ---
 

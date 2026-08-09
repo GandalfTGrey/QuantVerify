@@ -1,6 +1,6 @@
-# Investment Strategy Lab — STRATEGY_RESEARCH_PROTOCOL.md
+# QuantVerify — STRATEGY_RESEARCH_PROTOCOL.md
 
-> **定位**：本文件定义 Investment Strategy Lab 中 Agent 研究、翻译、实现、回测、验证和评级任何投资策略时必须遵循的标准流程。  
+> **定位**：本文件定义 QuantVerify 中 Agent 研究、翻译、实现、回测、验证和评级任何投资策略时必须遵循的标准流程。
 > **适用对象**：来自论文、书籍、机构报告、博客、X/微博/小红书/雪球帖子、视频口述、聊天记录、截图、人工想法或已有代码的策略。  
 > **上位约束**：本文件必须与 `BACKTEST_DATA_INTEGRITY.md` 同时执行；若两者冲突，以更严格的完整性规则为准。  
 > **核心目标**：把“听起来有道理的投资观点”变成“定义明确、可以复现、可以证伪、可以做样本外验证的策略假设”。
