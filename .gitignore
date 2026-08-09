@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+
+.DS_Store
+.env
+.idea/
+.vscode/
+
+# Local research data and generated artifacts are never source-controlled.
+data/
+artifacts/
+*.duckdb
+*.duckdb.wal

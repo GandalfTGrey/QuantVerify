@@ -1,1649 +1,569 @@
-# QuantVerify 项目总体架构设计
+# QuantVerify 项目总体架构
 
-> 版本：v0.1  
-> 当前重点：Stage 1 — Signal Research  
-> 后续阶段：Stage 2 — Order Execution Research / Paper Trading / Live Trading
+> 版本：v0.2
+> 状态：Stage 1 基线架构
+> 最后更新：2026-08-10
+> 配套文档：[架构审查](ARCHITECTURE_REVIEW.md) · [实施计划](IMPLEMENTATION_PLAN.md)
 
----
+## 1. 执行摘要
 
-## 1. 项目定位
+QuantVerify 是一个 **Strategy Research Laboratory（策略研究实验室）**，不是回测脚本集合，也不是交易终端。它把策略想法转换为有版本、可重复、可比较、可审计的实验，并用样本外和稳健性证据决定策略能否进入更昂贵的执行研究。
 
-QuantVerify 不是一个单纯的“回测脚本集合”，也不应在第一阶段被设计成一个完整交易终端。
+项目分为两个有明确契约边界的阶段：
 
-项目的核心目标是构建一个 **Strategy Research Laboratory（策略研究实验室）**：能够把自然语言中的投资策略系统化地转换为可重复、可比较、可验证的研究实验，并从大量候选策略中筛选出少量真正值得进入高精度交易仿真和后续实盘验证的策略。
+1. **Stage 1 — Signal Research**：研究在每个决策时点应持有什么目标组合；
+2. **Stage 2 — Execution Research**：研究目标组合在真实市场约束下如何变成订单、成交和实际持仓。
 
-整个项目明确划分为两个研究阶段：
+Stage 1 的正式交付物不是订单，而是带有 `decision_at` 和 `effective_at` 的 `TargetPosition`。Stage 2 只消费通过 Promotion Gate 的策略及目标仓位，不反向污染 Stage 1 的领域模型。
 
-1. **Signal Research**：研究“什么时候应该持有什么仓位”。
-2. **Order Execution Research**：研究“已经知道目标仓位后，如何真实地下单、成交和管理订单”。
+本架构的优先级依次为：
 
-Stage 1 优先完成 Signal Research；Stage 2 不在初期实现，但 Stage 1 的接口必须为 Stage 2 预留扩展空间。
+1. 因果正确性与无前视偏差；
+2. 可复现性与完整实验谱系；
+3. 样本外证据和过拟合控制；
+4. 批量研究效率；
+5. 可替换的基础设施；
+6. UI、Agent 和交易执行能力。
 
----
+## 2. 产品边界与成功标准
 
-# 2. 两阶段研究边界
+### 2.1 Stage 1 回答的问题
 
-## 2.1 Stage 1 — Signal Research
+- 策略是否在扣除合理成本后仍有稳定超额收益？
+- 结果是否跨参数、时间、标的和市场状态成立？
+- 结论是否来自真正隔离的样本外数据？
+- 数据、代码、配置和环境能否重建同一结果？
+- 与 Buy & Hold、指数、现金或其他策略相比是否改善风险收益？
+- 证据强度是否足以进入执行研究？
 
-Stage 1 主要回答：
+### 2.2 Stage 1 不负责的问题
 
-- 某个策略是否存在稳定的历史超额收益？
-- 策略适用于哪些标的？
-- 对哪些参数敏感？
-- 在牛市、熊市、震荡市是否稳定？
-- 策略是否只在某段历史数据中过拟合？
-- 策略在不同市场、不同时间周期下能否迁移？
-- 策略相对于 Buy & Hold 或其他 Benchmark 是否真正改善风险收益比？
-- 300 个候选策略中，哪些值得进入下一阶段？
+- 订单簿队列、部分成交、撤单和智能路由；
+- 复杂市场冲击和经纪商网关；
+- 高频或 tick 级微观结构；
+- 实盘风控、资金调拨和账户运营。
 
-Stage 1 重点研究：
+Stage 1 仍必须显式建模手续费、税费、基础滑点、换手约束、可交易性和最小执行延迟，否则研究结论无效。
 
-```text
-Market Data
-    ↓
-Indicators / Features
-    ↓
-Signal
-    ↓
-Target Position
-    ↓
-Portfolio Return
-    ↓
-Metrics
-    ↓
-Robustness Validation
-    ↓
-Strategy Rating
-```
+### 2.3 MVP 的可验收定义
 
-此阶段默认不重点建模：
+MVP 不是“完成一个网站”，而是满足以下能力：
 
-- 挂单队列
-- Limit Order Book
-- 部分成交
-- 撤单
-- 盘口冲击
-- 订单路由
-- Broker API
-- 高频成交模型
+- 至少 20 个结构不同的策略；
+- 多标的、多参数和多个历史区间的批量实验；
+- 所有运行具有可重建的数据、代码、配置和环境指纹；
+- 默认执行无前视偏差检查；
+- 至少支持时间切分、参数稳定性、跨标的和成本敏感性；
+- 产生标准化指标、稳健性报告、评级和 Promotion 决策；
+- 任意 Dashboard 数值均可追溯到一个不可变运行。
 
-但仍然需要支持基础交易成本模型，例如手续费、简单滑点、换手率惩罚，以避免完全不现实的回测结果。
-
----
-
-## 2.2 Stage 2 — Order Execution Research
-
-Stage 2 的输入不是“一个模糊策略”，而应该是 Stage 1 已经筛选出的少量候选策略。
-
-例如：
+## 3. 核心概念模型
 
 ```text
-300 Strategies
-      ↓
-Signal Research
-      ↓
-30 Promising Strategies
-      ↓
-Robustness Validation
-      ↓
-10 Approved Strategies
-      ↓
-Order Execution Research
+StrategyIdea
+    -> StrategySpec + StrategyVersion
+    -> Signal / Forecast
+    -> PortfolioConstruction + RiskPolicy
+    -> TargetPosition(decision_at, effective_at)
+    -> ResearchEngine
+    -> BacktestArtifacts
+    -> Metrics + Robustness + BenchmarkEvidence
+    -> StrategyRating
+    -> PromotionDecision
 ```
 
-Stage 2 主要回答：
+初稿中的 `Signal → TargetPosition` 过于直接。信号表达预测或偏好，目标仓位还必须经过组合构建、约束和风险预算。同一个信号可对应不同仓位；这三者不得混为一体：
 
-- 理论目标仓位能否真实实现？
-- T+1、涨跌停、停牌等规则会造成多大偏差？
-- 滑点和手续费对策略收益侵蚀多少？
-- 限价单和市价单的差异是什么？
-- 部分成交如何影响仓位？
-- 大额订单会产生多少市场冲击？
-- 理论回测收益与可执行收益差多少？
+| 对象 | 含义 | 示例 |
+|---|---|---|
+| Signal / Forecast | 对未来收益或方向的观点 | SPY score = 0.8 |
+| TargetPosition | 在约束后期望达到的组合权重 | SPY weight = 25% |
+| ActualPosition | 执行后真实持仓 | SPY weight = 23.7% |
 
-Stage 2 可以逐步接入：
-
-- VeighNa / vn.py
-- RQAlpha
-- LEAN
-- Paper Trading
-- Broker Gateway
-
-因此 VeighNa 更适合作为未来的 **Execution / High-Fidelity Simulation Adapter**，而不是 QuantVerify 的顶层架构。
-
----
-
-# 3. 总体系统架构
+## 4. 总体架构
 
 ```mermaid
 flowchart TD
-    A[Strategy Idea / Research Source] --> B[Strategy Definition Layer]
-    B --> C[Experiment Engine]
+    A["Strategy sources"] --> B["Strategy definition"]
+    B --> C["Feature and signal computation"]
+    C --> D["Portfolio construction and risk policy"]
+    D --> E["TargetPosition contract"]
 
-    D[Data Sources] --> E[Data Layer]
-    E --> F[Feature / Indicator Layer]
-    F --> C
+    DS["Point-in-time data sources"] --> DL["Data ingestion, normalization and validation"]
+    DL --> FS["Immutable dataset snapshots"]
+    FS --> C
 
-    C --> G[VectorBT Research Engine]
-    G --> H[Unified Backtest Result]
+    E --> EX["Experiment application service"]
+    FS --> EX
+    EX --> RE["ResearchEngine port"]
+    RE --> VBT["VectorBT adapter"]
+    RE --> REF["Reference/test adapter"]
 
-    H --> I[Metrics Engine]
-    H --> J[Robustness Engine]
-    H --> K[Benchmark / Comparison Engine]
+    VBT --> AR["Immutable run artifacts"]
+    REF --> AR
+    AR --> ME["Metrics"]
+    AR --> RO["Robustness"]
+    AR --> BE["Benchmarks"]
+    ME --> EV["Evidence bundle"]
+    RO --> EV
+    BE --> EV
+    EV --> RT["Rating and Promotion Gate"]
+    RT --> RS["Research store"]
+    RS --> UI["Dashboard / CLI / API"]
+    RS --> AG["Research Agent"]
 
-    I --> L[Strategy Rating Engine]
-    J --> L
-    K --> L
-
-    L --> M[Research Database]
-    M --> N[Dashboard]
-    M --> O[Research Agent]
-
-    L --> P{Promotion Gate}
-    P -->|Reject| Q[Archive / Knowledge Base]
-    P -->|Approve| R[Stage 2 Execution Research]
-
-    R --> S[Execution Adapter]
-    S --> T[VeighNa / RQAlpha / LEAN]
-    T --> U[Paper / Live Trading]
+    RT -->|"approved only"| S2["Stage 2 execution research"]
 ```
 
-核心原则：
+核心原则是：**QuantVerify 拥有领域语义、实验编排、验证协议、证据和知识；第三方引擎只实现端口。**
 
-> **QuantVerify 自己拥有 Strategy、Experiment、Validation、Rating 和 Research Knowledge；第三方框架只提供可替换的底层能力。**
+## 5. 分层和依赖规则
 
----
-
-# 4. Stage 1 核心数据流
+采用模块化单体与 Hexagonal Architecture。Stage 1 不使用微服务。
 
 ```mermaid
-flowchart LR
-    A[Raw Market Data] --> B[Normalized Data]
-    B --> C[Feature Calculation]
-    C --> D[Strategy Signal]
-    D --> E[Target Position]
-    E --> F[VectorBT Backtest]
-    F --> G[Equity / Trades / Positions]
-    G --> H[Metrics]
-    G --> I[Robustness Tests]
-    H --> J[Strategy Score]
-    I --> J
-    J --> K[Experiment Registry]
-    K --> L[Dashboard]
+flowchart TB
+    UI["Interface: CLI / API / Dashboard / Agent"] --> APP["Application: experiment workflows and use cases"]
+    APP --> DOM["Domain: models, rules, ports, identity"]
+    ADP["Adapters: data vendors, VectorBT, DuckDB, files"] --> DOM
+    UI --> DOM
+    APP -. "dependency injection" .-> ADP
 ```
 
-一个策略研究实验的核心对象可以抽象为：
+依赖规则：
+
+- `core/domain` 不依赖 pandas、VectorBT、DuckDB、Streamlit 或供应商 SDK；
+- `application` 只依赖领域对象和端口；
+- adapter 依赖并实现核心端口；
+- interface 只调用 application use case，不直接查询底层存储；
+- 策略不得依赖 Dashboard、SQL、VectorBT 内部对象或 vn.py；
+- 跨模块只通过公开契约，不导入另一个模块的私有实现。
+
+推荐代码布局：
 
 ```text
-Experiment =
-    Strategy
-  × Universe
-  × Time Range
-  × Frequency
-  × Parameter Set
-  × Cost Model
-  × Benchmark
-  × Validation Config
+quantverify/
+├── core/                 # 稳定领域模型、identity、errors、ports
+├── application/          # experiment/validation/promotion use cases
+├── data/                 # 数据端口实现、PIT 校验、snapshot
+├── features/             # 特征注册和因果计算
+├── strategies/           # 策略实现与注册
+├── portfolio/            # 组合构建、约束、风险预算
+├── experiments/          # 矩阵展开、调度、lineage
+├── engines/              # VectorBT 等 ResearchEngine adapters
+├── metrics/              # 独立指标实现
+├── robustness/           # 样本外及稳健性协议
+├── benchmarks/           # 基准生成与对齐
+├── rating/               # 评级与 Promotion policy
+├── storage/              # Parquet/DuckDB adapters
+├── interfaces/           # CLI/API
+├── dashboard/            # 只读研究控制台
+└── agents/               # 经审批的 research workflow
 ```
 
-这意味着 QuantVerify 不应该以“运行一个 Python 策略脚本”为中心，而应该以 **Experiment（实验）** 为一级对象。
+## 6. 数据架构与 Point-in-Time 语义
 
----
+### 6.1 标准 Bar Schema
 
-# 5. 模块总览
-
-| 模块 | 目的 | 核心输入 | 核心输出 | Stage |
-|---|---|---|---|---|
-| Data Layer | 提供一致、可追溯的数据 | Raw Data | Normalized Market Data | 1 |
-| Universe Layer | 定义研究标的集合 | Symbols / Rules | Universe | 1 |
-| Feature Layer | 统一计算技术指标和特征 | Market Data | Feature Matrix | 1 |
-| Strategy Layer | 描述策略逻辑 | Strategy Spec | Signal / Target Position | 1 |
-| Experiment Engine | 编排研究实验 | Strategy + Data + Config | Experiment Run | 1 |
-| Research Engine | 快速执行回测 | Signals | Backtest Result | 1 |
-| Metrics Engine | 计算风险收益指标 | Backtest Result | Metrics | 1 |
-| Robustness Engine | 判断是否过拟合 | Experiment Results | Robustness Report | 1 |
-| Benchmark Engine | 与基准比较 | Strategy + Benchmark | Relative Performance | 1 |
-| Rating Engine | 统一策略评级 | Metrics + Robustness | Strategy Score | 1 |
-| Result Store | 保存完整实验谱系 | Runs / Metrics | Research DB | 1 |
-| Dashboard | 可视化实验结果 | Research DB | UI / Charts | 1 |
-| Research Agent | 自动研究和总结 | Strategy / Results | Research Report | 1 |
-| Execution Adapter | 接入真实撮合引擎 | Target Position | Orders / Trades | 2 |
-
----
-
-# 6. Data Layer
-
-## 6.1 目的
-
-Data Layer 的任务不是简单“下载 K 线”，而是建立整个回测系统可信度的基础。
-
-它需要保证：
-
-- 不同数据源转换成统一格式；
-- 时间、交易日和频率一致；
-- 复权方式明确；
-- 数据版本可追踪；
-- Strategy 不直接依赖某一个数据供应商；
-- 回测结果能够追溯到具体数据版本。
-
-## 6.2 输入
-
-可能包括：
-
-- Yahoo Finance
-- Tushare
-- AkShare
-- BaoStock
-- Polygon
-- Broker Data
-- 本地 CSV / Parquet
-
-## 6.3 标准输出
-
-建议统一为 OHLCV Schema：
+最小字段：
 
 ```text
-symbol
-timestamp
-open
-high
-low
-close
+asset_id
+event_time             # 市场事件发生时间
+available_time         # 研究者在当时最早可获知时间
+open/high/low/close
 volume
-amount
-adjust_factor
+currency
+venue
 source
+ingested_at
+dataset_version
+adjustment_mode
 ```
 
-扩展字段：
+可选字段包括 amount、turnover、market_cap、fundamental values、suspend flag、limit up/down。基本面、指数成分、公司行动等修订型数据必须同时记录：
+
+- `event_time`：数据对应的经济时期；
+- `available_time`：当时可用于决策的时间；
+- `ingested_at`：系统摄取时间。
+
+只保存一个 `timestamp` 无法防止未来信息泄漏。
+
+### 6.2 数据流水线
 
 ```text
-turnover
-market_cap
-pe
-pb
-dividend
-suspend_flag
-limit_up
-limit_down
+Provider -> Raw immutable landing -> Normalizer -> Validator
+         -> Dataset manifest -> Partitioned Parquet -> DuckDB catalog
 ```
 
-## 6.4 实现
+每个 snapshot manifest 至少包含：
 
-建议采用：
+- 数据集 ID、schema 版本和内容 SHA-256；
+- 来源、拉取时间和许可信息；
+- 市场、频率、时区和交易日历；
+- 复权方式、币种和公司行动处理方式；
+- 行数、时间范围、标的范围和分区清单；
+- 数据质量结果及例外白名单。
 
-```text
-Data Provider
-      ↓
-Normalizer
-      ↓
-Validator
-      ↓
-Parquet
-      ↓
-DuckDB
-```
+### 6.3 强制质量门
 
-Parquet 负责高效文件存储，DuckDB 负责本地分析查询。
+- 主键唯一、时间单调、OHLC 关系合法；
+- 价格、成交量和币种字段范围合法；
+- 交易日历、时区及 DST 明确；
+- 缺口、停牌、退市和无交易日可区分；
+- 复权价格不得与现金分红再次重复记账；
+- 动态 universe 使用历史成分，不使用今天的成分回测过去；
+- 任何质量失败默认阻止实验，而不是静默填充。
 
-Strategy 不允许直接执行：
+### 6.4 存储选择
 
-```python
-ak.stock_zh_a_hist(...)
-```
+Stage 1 使用 Parquet 保存大体量不可变 artifacts，DuckDB 保存目录和研究查询。DuckDB 不是 artifact 本身的唯一事实来源。并发写入采用单 writer 或 append-only 文件后批量合并；多用户和高并发出现后再评估 PostgreSQL。
 
-而必须通过统一接口：
+## 7. 策略、特征与组合构建
 
-```python
-data = data_provider.get_bars(
-    symbols=["000300.SH"],
-    start="2015-01-01",
-    end="2025-12-31",
-    frequency="1d"
-)
-```
+### 7.1 StrategySpec
 
----
-
-# 7. Universe Layer
-
-## 7.1 目的
-
-将“策略”和“研究标的”解耦。
-
-同一策略应该能够被系统自动运行在：
-
-```text
-A股指数
-A股个股
-ETF
-美股指数
-美股个股
-商品
-黄金
-BTC
-```
-
-## 7.2 输入
-
-可以是：
+策略定义需要同时是人可读配置和版本化代码。纯 YAML 表达式只适合简单策略，复杂策略可引用注册的 Python 实现；禁止执行任意未审核表达式。
 
 ```yaml
-universe:
-  type: static
-  symbols:
-    - SPY
-    - QQQ
-    - GLD
-```
-
-也可以是规则：
-
-```yaml
-universe:
-  type: dynamic
-  market: CN
-  index: CSI300
-```
-
-## 7.3 输出
-
-```python
-Universe(
-    universe_id="csi300",
-    symbols=[...],
-    effective_dates=...
-)
-```
-
-## 7.4 重要原则
-
-未来必须避免：
-
-- Survivorship Bias
-- 当前成分股回测历史
-- 已退市股票缺失
-
-因此动态指数成分未来需要按历史日期恢复。
-
----
-
-# 8. Feature / Indicator Layer
-
-## 8.1 目的
-
-统一技术指标和策略特征，避免每个 Strategy 重复实现 MA、RSI、MACD。
-
-## 8.2 输入
-
-```text
-Normalized Market Data
-+ Feature Parameters
-```
-
-## 8.3 输出
-
-例如：
-
-```text
-close
-ma5
-ma10
-ma20
-ma60
-rsi14
-macd
-atr14
-volatility20
-return20
-```
-
-## 8.4 实现
-
-首期可以使用：
-
-- pandas
-- numpy
-- pandas-ta / TA-Lib（可选）
-
-但 QuantVerify 应维护自己的 Feature Registry：
-
-```python
-@register_feature("sma")
-def sma(close, window):
-    ...
-```
-
-这样 Agent 和 Strategy Spec 可以稳定引用统一特征名称。
-
----
-
-# 9. Strategy Layer
-
-Strategy Layer 是整个项目最重要的自有资产之一。
-
-## 9.1 目的
-
-把策略从某个具体回测框架中解耦。
-
-Strategy 不应该天然等于：
-
-```python
-class MyStrategy(CtaTemplate)
-```
-
-而应该表达：
-
-```text
-Data
- ↓
-Features
- ↓
-Entry / Exit Logic
- ↓
-Signal
- ↓
-Target Position
-```
-
-## 9.2 Strategy Spec
-
-建议逐步建立统一 Strategy Schema：
-
-```yaml
+schema_version: 1
 strategy:
   id: ma_cross
-  name: MA Cross
-  category: trend_following
-  frequency: daily
-
-features:
-  ma_short:
-    type: sma
-    window: 5
-  ma_long:
-    type: sma
-    window: 20
-
-entry:
-  condition: ma_short > ma_long
-
-exit:
-  condition: ma_short < ma_long
-
-position:
-  long: 1.0
-  flat: 0.0
-
-parameters:
-  short_window:
-    values: [3, 5, 10, 15, 20]
-  long_window:
-    values: [20, 30, 60, 120]
-```
-
-## 9.3 输入
-
-```text
-Market Data
-Feature Data
-Parameters
-```
-
-## 9.4 输出
-
-Stage 1 的标准输出不应该首先是 Order，而应该是：
-
-```text
-Signal
-Target Position
-```
-
-例如：
-
-```text
-2025-01-01  0
-2025-01-02  0
-2025-01-03  1
-2025-01-04  1
-2025-01-05  0
-```
-
-这就是 Signal Research 与 Execution Research 的正式接口边界。
-
----
-
-# 10. Experiment Engine
-
-Experiment Engine 是 QuantVerify Stage 1 的核心编排系统。
-
-## 10.1 目的
-
-将一个 Strategy 扩展成大量可重复研究实验。
-
-例如：
-
-```text
-Strategy
-   ×
-20 Parameters
-   ×
-300 Symbols
-   ×
-3 Frequencies
-   ×
-5 Time Windows
-```
-
-自动形成实验矩阵。
-
-## 10.2 输入
-
-```yaml
-experiment:
-  strategy: ma_cross
-  universe: csi300
-  period:
-    start: 2010-01-01
-    end: 2025-12-31
+  version: 1.0.0
+  implementation: quantverify.strategies.trend.ma_cross
+decision:
   frequency: 1d
-  benchmark: 000300.SH
-  cost_model: cn_stock_default
-  parameter_search: grid
+  at: bar_close
+features:
+  short_ma: {type: sma, window: ${short_window}}
+  long_ma: {type: sma, window: ${long_window}}
+signal:
+  rule: short_ma > long_ma
+portfolio:
+  allocator: single_asset_long_flat
+  gross_limit: 1.0
+execution_assumption:
+  price: next_open
+  lag_bars: 1
+parameters:
+  short_window: [5, 10, 20]
+  long_window: [30, 60, 120]
 ```
 
-## 10.3 输出
+### 7.2 Feature Registry
 
-生成唯一：
+Feature 定义必须包含名称、版本、输入 schema、参数 schema、warm-up、缺失值政策和可用时间规则。缓存键由 feature version、参数和 dataset hash 构成。特征实现必须通过“截断未来数据后历史输出不变化”的因果性测试。
+
+### 7.3 Portfolio Construction
+
+组合构建负责：
+
+- signal 到权重的映射；
+- gross/net exposure、单资产、行业和流动性约束；
+- 波动率目标、风险预算和杠杆限制；
+- 多币种现金及 FX 转换；
+- 再平衡频率、权重容差和不可交易资产处理。
+
+## 8. 时间、信号和成交语义
+
+这是系统最重要的正确性边界。
+
+`TargetPosition` 至少包含：
 
 ```text
-experiment_id
-run_id
+asset_id
+decision_at            # 策略做出决定的时间
+effective_at           # 最早允许成为实际仓位的时间
+target_weight
+base_currency
 strategy_version
-data_version
-parameter_hash
 ```
 
-保证任何结果均可重复。
+规则：
 
-## 10.4 实现
+- `effective_at` 必须晚于 `decision_at`；
+- 默认日线“收盘信号”不能以同一收盘价成交；
+- 引擎必须明确 close-to-close、open-to-open 或 open-to-close 的收益口径；
+- 特征 warm-up、信号 lag、成交 lag 不得重复或遗漏；
+- 时区转换必须发生在明确的市场日历语境内；
+- 缺失 bar 不等于零收益，停牌不等于清仓；
+- 多资产组合必须定义同步和估值政策。
 
-首期：
+任何允许 same-bar execution 的研究配置都需要显式标记、记录理由并在 Rating 中降低 evidence quality。
+
+## 9. Experiment 是一级对象
+
+实验描述“要验证什么”；运行描述“在哪个环境执行了一次”。二者不能共用一个 ID。
 
 ```text
-Grid Search
+ExperimentConfig =
+    StrategyVersion
+  x UniverseSnapshot
+  x DatasetSnapshot
+  x TimeRange
+  x Frequency
+  x Parameters
+  x PortfolioPolicy
+  x CostModel
+  x ExecutionAssumptions
+  x Benchmark
+  x ValidationProtocol
+  x EngineVersion
+  x RandomSeed
 ```
 
-后续扩展：
+### 9.1 身份模型
 
-```text
-Random Search
-Optuna
-Bayesian Optimization
-```
+- `experiment_id`：上述科学输入的 canonical JSON 经 SHA-256 生成；
+- `run_id`：`experiment_id + source_commit + environment_lock_hash + worker/runtime`；
+- `artifact_id`：artifact 内容哈希；
+- 参数字典顺序不能改变 ID；任一科学输入改变必须产生新 experiment ID；
+- 重跑相同实验不得覆盖旧结果，结果应去重或并列记录。
 
-注意：参数优化必须服务于“寻找稳定区域”，而不是寻找历史最优单点。
+每次运行必须记录状态机：`pending -> running -> succeeded | failed`，以及开始/结束时间、错误分类、日志和产生的 artifacts。
 
----
+### 9.2 执行与调度
 
-# 11. Research Engine — VectorBT
+初期使用进程内 runner 和显式批处理。只有当本地并行和单机资源限制成为真实瓶颈后才引入任务队列。调度器必须支持：
 
-## 11.1 为什么 Stage 1 优先 VectorBT
+- 幂等重试；
+- 最大参数组合和资源预算；
+- 失败隔离与部分结果可见；
+- deterministic seed；
+- 取消和断点恢复；
+- CPU、内存、耗时及 artifact 体积记录。
 
-Signal Research 典型任务是：
+## 10. Research Engine 端口
 
-```text
-300 Strategies
-×
-Hundreds of Symbols
-×
-Hundreds of Parameter Sets
-```
-
-这类任务更适合 Vectorized Backtesting，而非逐 Bar 的高精度订单模拟。
-
-VectorBT 的定位正好适合：
-
-- 多参数快速计算；
-- 多资产并行；
-- Signal → Portfolio；
-- 快速生成大量实验结果。
-
-## 11.2 输入
-
-```text
-Price Matrix
-Entry Signal
-Exit Signal
-Target Position
-Fee / Slippage Config
-```
-
-## 11.3 输出
-
-统一转换为 QuantVerify 自己的：
+VectorBT 适合多参数和多资产向量化研究，但不能泄漏到领域层。
 
 ```python
-BacktestResult
+class ResearchEngine(Protocol):
+    def run(
+        self,
+        config: ExperimentConfig,
+        market_data: ArtifactRef,
+        targets: Sequence[TargetPosition],
+    ) -> Sequence[ArtifactRef]: ...
 ```
 
-而不是把 VectorBT 对象泄漏给其他模块。
+统一输出以 versioned artifact schemas 表达：
 
-建议结构：
+- equity curve；
+- period returns；
+- target/effective/actual positions；
+- trades 与 turnover；
+- costs breakdown；
+- cash、FX 和 exposure；
+- warnings 和执行假设；
+- engine diagnostics。
 
-```python
-class BacktestResult:
-    equity_curve
-    returns
-    positions
-    trades
-    turnover
-    costs
-    metadata
-```
+至少维护一个小型 reference engine/fixture，用于 golden tests。VectorBT adapter 的关键结果必须与 reference fixtures 对账，避免升级引擎后静默改变语义。
 
-## 11.4 Adapter
+## 11. Metrics 和 Benchmark
 
-```python
-class ResearchEngine(ABC):
-    def run(self, request) -> BacktestResult:
-        ...
+Metrics 独立于回测引擎。所有指标定义需版本化并明确：
 
-class VectorBTAdapter(ResearchEngine):
-    ...
-```
+- 收益频率、年化因子和交易日历；
+- 算术或几何收益；
+- 风险免费利率的来源及对齐；
+- 缺失值和短样本政策；
+- gross/net of costs；
+- 样本内、验证集和测试集标签。
 
-未来增加其他 Engine 时，上层系统无需修改。
+指标组：Return、Risk、Risk-adjusted、Trading、Exposure、Relative。Benchmark 本身应使用相同的数据、成本、日历和评估区间生成可追溯运行，禁止拿口径不一致的外部曲线直接比较。
 
----
+## 12. Robustness 与研究协议
 
-# 12. Metrics Engine
+目标不是寻找最高收益参数，而是评估 Edge 是否稳定。
 
-## 12.1 目的
+### 12.1 首批强制验证
 
-建立独立于 VectorBT 的标准指标体系。
+- Temporal train/validation/test split；
+- Purged/embargoed walk-forward（标签重叠时）；
+- Parameter neighborhood stability；
+- Cross-asset / cross-market stability；
+- Market regime stability；
+- Cost and delay sensitivity；
+- Benchmark-relative out-of-sample performance。
 
-## 12.2 输入
+### 12.2 后续统计控制
+
+- Trade/return block bootstrap；
+- Deflated Sharpe Ratio；
+- Probability of Backtest Overfitting / CSCV；
+- Multiple-testing correction；
+- Strategy correlation 和家族级选择偏差控制。
+
+必须记录全部尝试过的实验，而不只记录“获胜者”。测试集原则上只解封一次；解封后继续调参意味着原测试集转为训练历史，必须创建新的最终检验期。
+
+## 13. Rating 与 Promotion Gate
+
+Rating 是 policy，不是散落在 UI 中的公式。输入包括：
 
 ```text
-BacktestResult
-Benchmark Return
-Risk-free Rate
+Performance + Risk + OOS Evidence + Robustness + Generalization
++ Cost Resistance + Complexity + Data Quality + Research Conduct
 ```
 
-## 12.3 输出
+输出包括分维度得分、总等级、置信度、否决原因和 policy version。任何硬性 gate 失败都不能被高收益抵消，例如：
 
-建议至少包括：
+- 数据质量或可复现性失败；
+- 明确的 look-ahead / survivorship bias；
+- 测试集低于最低样本长度；
+- 成本压力下完全失效；
+- 样本外表现未达标；
+- 研究尝试记录不完整。
 
-### Return
+权重和阈值必须在独立研究协议中版本化，不在代码里写匿名常量。Promotion 决策由 reviewer 和时间戳审计，不由 Agent 自动批准。
 
-- Total Return
-- CAGR
-- Annual Return
+## 14. Result Store 与查询模型
 
-### Risk
-
-- Volatility
-- Max Drawdown
-- Drawdown Duration
-
-### Risk Adjusted
-
-- Sharpe
-- Sortino
-- Calmar
-
-### Trading
-
-- Win Rate
-- Profit Factor
-- Average Trade
-- Turnover
-- Number of Trades
-
-### Relative
-
-- Alpha
-- Beta
-- Information Ratio
-- Excess Return
-
----
-
-# 13. Robustness Engine
-
-这是区分“策略回测网站”和“策略研究平台”的关键模块。
-
-## 13.1 目标
-
-不回答：
-
-> 哪组参数收益最高？
-
-而回答：
-
-> 这个策略是否可能真的存在稳定 Edge？
-
-## 13.2 输入
+主要实体：
 
 ```text
-Strategy
-Experiment Results
-Historical Data
-Parameter Space
+strategies / strategy_versions
+universe_snapshots / dataset_snapshots
+experiments / runs / run_attempts
+artifact_manifests
+metric_sets / robustness_reports
+ratings / promotion_decisions
+research_notes / audit_events
 ```
 
-## 13.3 测试类型
+存储规则：
 
-首批建议实现：
+- artifacts 不可变，元数据 append-only；
+- schema 版本和 migration 明确；
+- 大数组保存在 Parquet，不塞入单个数据库字段；
+- Dashboard 通过 read model 查询，不直接推导研究结论；
+- 删除或归档遵循数据许可、磁盘预算和研究审计政策。
 
-### Parameter Stability
+## 15. Dashboard、API 与 Agent
 
-观察：
+### 15.1 Dashboard
+
+首期使用 Streamlit + Plotly，页面包括策略概览、运行详情、净值/回撤、参数表面、跨资产、稳健性、数据质量、Leaderboard 和 Promotion review。每个图表必须展示 experiment/run ID、数据 snapshot、成本口径及 IS/OOS 标签。
+
+### 15.2 API/CLI
+
+自动化首先通过稳定 CLI 和 application service 完成，Dashboard 不承担编排逻辑。长期产品化时再增加 FastAPI；React 只在交互复杂度和多用户需求已验证后引入。
+
+### 15.3 Research Agent
+
+Agent 可以发现、解释、形式化、生成草案实验并撰写报告，但不能：
+
+- 静默改变策略定义；
+- 选择性隐藏失败实验；
+- 解封测试集或自动批准 Promotion；
+- 执行未审核代码或访问未授权 secrets；
+- 绕过成本、数据质量和资源预算。
+
+所有 Agent 动作写入审计日志，生成的 StrategySpec 先经 schema validation 和人工审批。
+
+## 16. Stage 2 接口预留
+
+Stage 2 消费：
 
 ```text
-MA5/20
-MA6/20
-MA5/21
-MA7/25
+Approved StrategyVersion
++ TargetPosition stream
++ ExecutionPolicy
++ Market/Account constraints
 ```
 
-是否都具有类似结果。
+并产出 Order、Fill、ActualPosition 和 implementation shortfall。VeighNa、RQAlpha 和 LEAN 作为 ExecutionEngine adapters，不成为顶层领域模型。Stage 1 暂不实现这些 adapter，只冻结 `TargetPosition` 的语义和版本策略。
 
-如果只有某一个参数点极好，应视为过拟合风险。
+## 17. 非功能需求
 
-### Time Split
+### 17.1 正确性
+
+- golden dataset + golden results；
+- unit、contract、property、integration 和 regression tests；
+- adapter 交叉对账；
+- dependency upgrade 后进行结果差异审查。
+
+### 17.2 可复现性
+
+- 锁定依赖环境；
+- 记录 source commit、Python/engine version 和 seed；
+- dataset 与 artifact content addressing；
+- 时间和随机数由注入的 clock/RNG 管理。
+
+### 17.3 性能
+
+MVP 目标在 Milestone 1 基线后实测确定。不得在没有 benchmark 的情况下承诺吞吐。需记录单次实验 CPU、峰值内存、运行时间和缓存命中率，并设置参数爆炸预算。
+
+### 17.4 可观测性
+
+结构化日志包含 experiment_id、run_id、strategy_id 和 dataset_id；错误按 data/config/engine/resource/internal 分类。运行统计进入 research metadata，不依赖人工翻日志。
+
+### 17.5 安全与治理
+
+- secrets 只存环境变量或 secret manager；
+- raw data、凭证和生成 artifacts 默认不进 Git；
+- 数据源许可、再分发限制和保留策略进入 manifest；
+- Strategy DSL 不使用任意 `eval`；
+- dependency 和供应链扫描纳入 CI。
+
+## 18. 技术栈和演进约束
+
+Stage 1 基线：Python 3.11/3.12、Pydantic v2、NumPy、pandas、PyArrow/Parquet、DuckDB、VectorBT adapter、PyYAML、pytest、Ruff、mypy、Plotly、Streamlit。
+
+暂不引入 Kafka、Redis、Celery、Kubernetes、微服务或独立前端。只有出现可量化的并发、可靠性或团队边界需求时，通过 ADR 引入。
+
+## 19. 测试策略
+
+测试金字塔：
+
+1. **Domain unit tests**：模型、身份、时间和约束；
+2. **Property tests**：无未来数据、现金守恒、ID 稳定性；
+3. **Contract tests**：所有 DataProvider/ResearchEngine/Store adapter；
+4. **Golden tests**：小数据集上的逐期仓位、收益、成本和指标；
+5. **Integration tests**：Parquet -> experiment -> artifacts -> DuckDB；
+6. **Regression tests**：依赖升级前后研究结果容差；
+7. **Performance tests**：代表性实验矩阵的时间与内存。
+
+关键不变量：
+
+- 截断未来数据不改变过去的 feature/signal；
+- 成本非负时净收益不得高于相同路径的毛收益；
+- 空仓且无费用时收益为零；
+- 相同输入产生相同 experiment ID；
+- `effective_at > decision_at`；
+- 所有展示结果都有完整 lineage。
+
+## 20. 交付路线
+
+采用 vertical slice，详细工作包和验收标准见 `IMPLEMENTATION_PLAN.md`：
+
+1. **M0 Foundation**：领域契约、身份、配置、CI、测试；
+2. **M1 Minimum Research Loop**：fixture/CSV -> SMA -> reference/VectorBT -> metrics -> artifacts；
+3. **M2 Data and Strategy Abstractions**：snapshot、PIT、feature/strategy registry、portfolio；
+4. **M3 Experiment Matrix and Store**：grid、lineage、DuckDB、CLI；
+5. **M4 Robustness and Promotion**：OOS、walk-forward、稳定性、policy；
+6. **M5 Research Console**：Dashboard 和可追溯 read models；
+7. **M6 Research Agent**：受控 spec/report workflow；
+8. **M7 Execution Research**：仅对获批策略启动。
+
+## 21. 架构治理
+
+- 关键决策以 ADR 记录；
+- 领域 schema 使用显式版本并保持向后读取能力；
+- 修改时间/收益/成本语义必须有 golden regression；
+- 每个 milestone 通过 exit criteria 后再扩大范围；
+- 架构文档描述当前认可的目标架构，实施计划描述落地顺序，二者不得混为状态报告。
+
+## 22. 最终形态
 
 ```text
-Train / Validation / Test
+Strategy sources
+    -> governed StrategySpec
+    -> causal Signal Research
+    -> immutable Research Evidence
+    -> human-reviewed Promotion Gate
+    -> Execution Research
+    -> Paper / Live Trading
 ```
 
-### Walk Forward
-
-滚动训练和验证。
-
-### Market Regime
-
-分别测试：
-
-```text
-Bull
-Bear
-Sideways
-High Volatility
-Low Volatility
-```
-
-### Cross Asset
-
-验证同一策略是否只在某一个标的有效。
-
-### Cost Sensitivity
-
-测试手续费和滑点提高后策略是否仍成立。
-
-### Bootstrap / Monte Carlo
-
-后续实现收益序列和 Trade Sequence 重采样。
-
-## 13.4 输出
-
-```python
-RobustnessReport(
-    parameter_stability=...,
-    time_stability=...,
-    cross_asset_stability=...,
-    regime_stability=...,
-    cost_sensitivity=...,
-    overfit_risk=...
-)
-```
-
----
-
-# 14. Benchmark / Comparison Engine
-
-## 14.1 目的
-
-策略收益本身没有意义，必须回答：
-
-```text
-比什么更好？
-```
-
-## 14.2 Benchmark
-
-支持：
-
-- Buy & Hold
-- 指数
-- 无风险收益
-- Equal Weight
-- 其他 Strategy
-
-## 14.3 输出
-
-```text
-Absolute Performance
-Relative Performance
-Excess Return
-Relative Drawdown
-Rolling Alpha
-```
-
----
-
-# 15. Strategy Rating Engine
-
-## 15.1 目的
-
-将大量实验结果压缩成统一的策略候选排序。
-
-不是简单按照 Sharpe 排名。
-
-建议未来评分由以下维度组成：
-
-```text
-Performance
-Risk
-Robustness
-Generalization
-Turnover / Cost
-Complexity
-Evidence Quality
-```
-
-例如：
-
-```text
-Strategy Score =
-    20% Return Quality
-  + 20% Risk Adjusted Return
-  + 25% Robustness
-  + 15% Cross Asset Generalization
-  + 10% Cost Resistance
-  + 10% Simplicity
-```
-
-具体权重应在后续 `STRATEGY_RESEARCH_PROTOCOL.md` 中进一步定义，而不是现在硬编码。
-
-## 15.2 输出
-
-```text
-A / B / C / D
-```
-
-以及：
-
-```text
-Research
-Watchlist
-Promote to Execution Research
-Reject
-```
-
----
-
-# 16. Result Store / Research Database
-
-## 16.1 目的
-
-系统必须保存的不只是最终收益数字，而是完整的 **Experiment Lineage**。
-
-需要回答：
-
-> 这个 Sharpe 1.42 到底是哪个策略版本、哪个数据版本、哪些参数跑出来的？
-
-## 16.2 核心实体
-
-建议：
-
-```text
-strategies
-strategy_versions
-universes
-datasets
-experiments
-runs
-parameters
-metrics
-robustness_results
-ratings
-reports
-```
-
-## 16.3 实现
-
-Stage 1 推荐：
-
-```text
-Parquet + DuckDB
-```
-
-如果以后出现：
-
-- 多用户
-- Web Server
-- 大量并发任务
-
-再升级 PostgreSQL。
-
----
-
-# 17. Dashboard
-
-## 17.1 目的
-
-Dashboard 不是单纯显示资金曲线，而是 Strategy Research Console。
-
-## 17.2 首期页面
-
-### Strategy Overview
-
-```text
-Strategy Description
-Category
-Parameters
-Research Status
-Rating
-```
-
-### Backtest
-
-```text
-Equity Curve
-Drawdown
-Rolling Return
-Position
-Trades
-```
-
-### Parameter Surface
-
-例如：
-
-```text
-MA Short × MA Long → Sharpe
-```
-
-Heatmap 可以直观看出稳定区域和孤立最优点。
-
-### Cross Asset
-
-```text
-Strategy × Asset
-```
-
-### Robustness
-
-显示：
-
-```text
-Time Stability
-Parameter Stability
-Market Regime
-Cost Sensitivity
-```
-
-### Strategy Leaderboard
-
-从数百个策略中筛选候选。
-
-## 17.3 实现路径
-
-Stage 1 初期：
-
-```text
-Streamlit + Plotly
-```
-
-优点是开发速度快。
-
-如果后续成为长期产品，再升级：
-
-```text
-FastAPI + React
-```
-
----
-
-# 18. Research Agent
-
-Agent 不应该直接控制 Backtest Engine 的底层细节，而应该运行在 Research Workflow 上。
-
-## 18.1 Agent Workflow
-
-```text
-Discover Strategy
-      ↓
-Interpret Strategy
-      ↓
-Formalize Rules
-      ↓
-Create Strategy Spec
-      ↓
-Generate Experiment
-      ↓
-Run Backtest
-      ↓
-Run Robustness
-      ↓
-Compare Benchmark
-      ↓
-Generate Rating
-      ↓
-Write Research Report
-```
-
-## 18.2 输入
-
-可能来自：
-
-```text
-X Post
-Blog
-Research Paper
-Book
-Manual Strategy Idea
-```
-
-## 18.3 输出
-
-```text
-Strategy Spec
-Experiment Config
-Backtest Results
-Robustness Report
-Strategy Rating
-Research Note
-```
-
-## 18.4 Agent 的边界
-
-Agent 可以生成实验。
-
-Agent 不能：
-
-- 偷偷改变策略定义；
-- 忽略失败实验；
-- 只展示最优参数；
-- 改变数据集后不记录版本。
-
-所有 Agent 行为必须符合 Strategy Research Protocol。
-
----
-
-# 19. Stage 1 → Stage 2 Promotion Gate
-
-Stage 1 和 Stage 2 之间必须存在正式 Gate。
-
-```mermaid
-flowchart LR
-    A[Candidate Strategy] --> B[Signal Research]
-    B --> C[Robustness Validation]
-    C --> D[Strategy Rating]
-    D --> E{Promotion Gate}
-    E -->|Fail| F[Archive]
-    E -->|Pass| G[Execution Research]
-```
-
-Promotion 条件未来可以包括：
-
-```text
-Minimum Sharpe
-Maximum Drawdown
-Minimum Test Period
-Cross-Asset Stability
-Parameter Stability
-Cost Sensitivity
-Out-of-Sample Performance
-```
-
-这里的核心思想是：
-
-> 不让几百个普通策略进入昂贵、复杂的高精度 Execution Research。
-
----
-
-# 20. Stage 2 Execution Adapter 预留设计
-
-Stage 1 的标准输出：
-
-```python
-TargetPosition
-```
-
-Stage 2 将它转换成：
-
-```text
-Target Position
-      ↓
-Execution Policy
-      ↓
-Order
-      ↓
-Matching
-      ↓
-Trade
-      ↓
-Actual Position
-```
-
-Adapter：
-
-```python
-class ExecutionEngine(ABC):
-    def run(self, target_positions, config):
-        ...
-
-class VnpyExecutionAdapter(ExecutionEngine):
-    ...
-
-class RQAlphaExecutionAdapter(ExecutionEngine):
-    ...
-```
-
-这样后续不需要推翻 Stage 1。
-
----
-
-# 21. 推荐项目文件结构
-
-```text
-QuantVerify/
-│
-├── README.md
-├── pyproject.toml
-├── .env.example
-├── .gitignore
-│
-├── docs/
-│   ├── PROJECT_ARCHITECTURE.md
-│   ├── STRATEGY_UNIVERSE.md
-│   ├── STRATEGY_RESEARCH_PROTOCOL.md
-│   ├── BACKTEST_ACCURACY.md
-│   └── DATA_PROTOCOL.md
-│
-├── configs/
-│   ├── data/
-│   ├── experiments/
-│   ├── universes/
-│   └── strategies/
-│
-├── data/
-│   ├── raw/
-│   ├── normalized/
-│   ├── features/
-│   └── cache/
-│
-├── quantverify/
-│   │
-│   ├── core/
-│   │   ├── models.py
-│   │   ├── enums.py
-│   │   ├── exceptions.py
-│   │   └── registry.py
-│   │
-│   ├── data/
-│   │   ├── base.py
-│   │   ├── providers/
-│   │   ├── normalizer.py
-│   │   ├── validator.py
-│   │   ├── calendar.py
-│   │   └── storage.py
-│   │
-│   ├── universe/
-│   │   ├── base.py
-│   │   ├── static.py
-│   │   └── dynamic.py
-│   │
-│   ├── features/
-│   │   ├── registry.py
-│   │   ├── trend.py
-│   │   ├── momentum.py
-│   │   ├── volatility.py
-│   │   └── volume.py
-│   │
-│   ├── strategies/
-│   │   ├── base.py
-│   │   ├── schema.py
-│   │   ├── registry.py
-│   │   ├── trend/
-│   │   ├── mean_reversion/
-│   │   ├── momentum/
-│   │   ├── dca/
-│   │   ├── rotation/
-│   │   └── factor/
-│   │
-│   ├── experiments/
-│   │   ├── models.py
-│   │   ├── runner.py
-│   │   ├── grid.py
-│   │   ├── scheduler.py
-│   │   └── lineage.py
-│   │
-│   ├── engines/
-│   │   ├── base.py
-│   │   ├── vectorbt_engine.py
-│   │   └── execution/
-│   │       ├── base.py
-│   │       ├── vnpy_adapter.py
-│   │       └── rqalpha_adapter.py
-│   │
-│   ├── metrics/
-│   │   ├── returns.py
-│   │   ├── risk.py
-│   │   ├── trading.py
-│   │   └── relative.py
-│   │
-│   ├── robustness/
-│   │   ├── parameter.py
-│   │   ├── timesplit.py
-│   │   ├── walk_forward.py
-│   │   ├── regime.py
-│   │   ├── cross_asset.py
-│   │   ├── cost.py
-│   │   └── bootstrap.py
-│   │
-│   ├── benchmarks/
-│   │   ├── buy_hold.py
-│   │   ├── index.py
-│   │   └── strategy.py
-│   │
-│   ├── rating/
-│   │   ├── score.py
-│   │   └── promotion.py
-│   │
-│   ├── storage/
-│   │   ├── experiment_store.py
-│   │   ├── result_store.py
-│   │   └── metadata_store.py
-│   │
-│   ├── agents/
-│   │   ├── strategy_agent.py
-│   │   ├── experiment_agent.py
-│   │   ├── validation_agent.py
-│   │   └── report_agent.py
-│   │
-│   └── dashboard/
-│       ├── app.py
-│       ├── pages/
-│       └── components/
-│
-├── notebooks/
-│   ├── strategy_prototypes/
-│   └── validation/
-│
-├── scripts/
-│   ├── download_data.py
-│   ├── run_experiment.py
-│   ├── run_validation.py
-│   └── build_report.py
-│
-└── tests/
-    ├── data/
-    ├── strategies/
-    ├── engines/
-    ├── metrics/
-    └── robustness/
-```
-
----
-
-# 22. 代码依赖方向
-
-必须控制依赖方向，避免后续形成一个无法维护的大工程。
-
-推荐：
-
-```mermaid
-flowchart TD
-    CORE[core] --> DATA[data]
-    CORE --> STRATEGY[strategies]
-    CORE --> EXP[experiments]
-    CORE --> ENGINE[engines]
-
-    DATA --> STRATEGY
-    STRATEGY --> EXP
-    DATA --> EXP
-    EXP --> ENGINE
-
-    ENGINE --> METRICS[metrics]
-    ENGINE --> ROBUST[robustness]
-    METRICS --> RATING[rating]
-    ROBUST --> RATING
-
-    RATING --> STORAGE[storage]
-    STORAGE --> DASH[dashboard]
-    STORAGE --> AGENT[agents]
-```
-
-禁止出现：
-
-```text
-Strategy → Dashboard
-Strategy → Database SQL
-Strategy → VectorBT internal API
-Strategy → vn.py
-```
-
-Strategy 只负责策略逻辑。
-
----
-
-# 23. 核心领域对象
-
-建议第一版先明确几个 Domain Model。
-
-```python
-MarketData
-FeatureSet
-Universe
-StrategySpec
-StrategyVersion
-Signal
-TargetPosition
-ExperimentConfig
-ExperimentRun
-BacktestRequest
-BacktestResult
-MetricsResult
-RobustnessReport
-StrategyRating
-```
-
-其中最关键的是：
-
-```text
-StrategySpec
-ExperimentConfig
-BacktestResult
-```
-
-只要这三个接口设计稳定，大量底层实现都可以逐渐替换。
-
----
-
-# 24. Stage 1 推荐技术栈
-
-```text
-Language
-└── Python 3.11+
-
-Data
-├── Pandas
-├── NumPy
-├── Parquet
-└── DuckDB
-
-Signal Research
-└── VectorBT
-
-Optimization
-├── Grid Search
-└── Optuna（后续）
-
-Visualization
-├── Plotly
-└── Streamlit
-
-Config
-├── YAML
-└── Pydantic
-
-Testing
-└── Pytest
-
-Packaging
-└── pyproject.toml
-```
-
-暂时不建议一开始加入：
-
-```text
-Kafka
-Redis
-Celery
-Kubernetes
-Microservices
-```
-
-这些对 Stage 1 的研究价值很低，却会大幅增加复杂度。
-
----
-
-# 25. 实施顺序
-
-建议不要按照“先把所有模块都写完”的方式开发，而采用 Vertical Slice。
-
-## Milestone 0 — Foundation
-
-建立：
-
-```text
-pyproject
-core models
-config
-logging
-tests
-```
-
-## Milestone 1 — Minimum Research Loop
-
-首先跑通唯一一条完整链路：
-
-```text
-Download SPY
-   ↓
-SMA Strategy
-   ↓
-VectorBT
-   ↓
-BacktestResult
-   ↓
-Sharpe / CAGR / MaxDD
-   ↓
-Save Result
-```
-
-这是第一个真正可工作的 QuantVerify。
-
-## Milestone 2 — Strategy / Universe Abstraction
-
-加入：
-
-```text
-Strategy Registry
-Universe
-Parameters
-Experiment Config
-```
-
-达到：
-
-```text
-10 Strategies × 10 Assets
-```
-
-自动运行。
-
-## Milestone 3 — Experiment Engine
-
-加入：
-
-```text
-Grid Search
-Experiment IDs
-Result Store
-Parameter Heatmap
-```
-
-## Milestone 4 — Robustness
-
-优先实现：
-
-```text
-Time Split
-Parameter Stability
-Cross Asset
-Cost Sensitivity
-```
-
-## Milestone 5 — Dashboard
-
-形成完整 Strategy Research Console。
-
-## Milestone 6 — Agent
-
-接入：
-
-```text
-Natural Language Strategy
-→ Strategy Spec
-→ Experiment
-→ Validation
-→ Report
-```
-
-## Milestone 7 — Execution Research
-
-仅针对通过 Promotion Gate 的少量策略增加：
-
-```text
-VeighNa Adapter
-RQAlpha Adapter
-High Fidelity Backtest
-```
-
----
-
-# 26. Stage 1 的 MVP 定义
-
-第一阶段 MVP 不应该定义成“做完一个网站”。
-
-建议定义为：
-
-> **系统可以对 20+ 个结构不同的策略，在多个标的、多个参数和多个历史区间上自动完成批量 Signal Research，并产生可重复的标准化研究结果。**
-
-MVP 最少支持：
-
-```text
-Data Provider
-5+ Indicators
-Strategy Base Class
-10+ Strategies
-Universe
-VectorBT Adapter
-Experiment Runner
-Parameter Grid Search
-Metrics
-Basic Robustness
-DuckDB Result Store
-Simple Dashboard
-```
-
----
-
-# 27. 项目架构的核心设计原则
-
-### Principle 1 — Research First
-
-阶段一所有设计首先优化研究效率，而不是交易执行真实性。
-
-### Principle 2 — Signal / Execution Separation
-
-Signal Research 输出 Target Position；Execution Research 从 Target Position 开始。
-
-### Principle 3 — Strategy Engine Independence
-
-Strategy 不属于 VectorBT，也不属于 VeighNa。
-
-### Principle 4 — Experiment Is First-Class
-
-系统围绕 Experiment，而不是围绕一次脚本运行设计。
-
-### Principle 5 — Reproducibility
-
-任何结果必须能够由以下信息重现：
-
-```text
-Strategy Version
-Data Version
-Parameters
-Universe
-Period
-Engine Version
-Config
-```
-
-### Principle 6 — Robustness Before Optimization
-
-平台不是寻找“历史收益最高参数”的机器，而是寻找稳定 Edge 的机器。
-
-### Principle 7 — Open-source Engines Are Replaceable Infrastructure
-
-VectorBT、VeighNa、RQAlpha 都是 Adapter，而不是 QuantVerify 的核心 Domain Model。
-
-### Principle 8 — Promotion Gate
-
-只有少数经过严格 Signal Research 的策略才进入 Execution Research。
-
----
-
-# 28. 最终目标形态
-
-```text
-                 Strategy Sources
-        X / Papers / Books / Manual Ideas
-                         │
-                         ▼
-                  Strategy Agent
-                         │
-                         ▼
-                   Strategy Spec
-                         │
-                         ▼
-                 Strategy Universe
-                         │
-                         ▼
-                Experiment Factory
-                         │
-                         ▼
-         ┌─────────────────────────────┐
-         │      SIGNAL RESEARCH        │
-         │                             │
-         │ VectorBT                    │
-         │ Parameter Search            │
-         │ Cross Asset                 │
-         │ Walk Forward                │
-         │ Robustness                  │
-         │ Benchmark                   │
-         └──────────────┬──────────────┘
-                        │
-                        ▼
-                 Strategy Rating
-                        │
-               ┌────────┴────────┐
-               │                 │
-             Reject            Promote
-               │                 │
-               ▼                 ▼
-        Knowledge Base    EXECUTION RESEARCH
-                                 │
-                          ┌──────┼──────┐
-                          ▼      ▼      ▼
-                       VeighNa RQAlpha LEAN
-                          │
-                          ▼
-                   Paper / Live Trading
-```
-
-QuantVerify 最终应该成为：
-
-> **一个从 Strategy Idea 到 Research Evidence，再到 Execution Validation 的完整策略验证系统。**
-
-而 Stage 1 的任务非常明确：
-
-> **先把 Signal Research 做深、做快、做标准化、做可重复。**
-
-不要过早让真实交易系统的复杂度污染 Strategy Research 架构。
+QuantVerify 的长期资产不是某次高收益曲线，而是可信的数据谱系、严谨的研究协议、稳定的领域契约和所有成功/失败实验形成的知识库。
