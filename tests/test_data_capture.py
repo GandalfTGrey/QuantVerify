@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any
 from unittest import TestCase
+
+from pydantic import ValidationError
 
 from quantverify.core.enums import AssetClass
 from quantverify.core.models import AssetId
@@ -65,6 +69,24 @@ class FakeAkShareClient:
         return FakeAkShareFrame(self.records)
 
 
+class FixtureEnum(Enum):
+    VALUE = "fixture-value"
+
+
+class ItemScalar:
+    def item(self) -> int:
+        return 7
+
+
+class IsoScalar:
+    def isoformat(self) -> str:
+        return "2026-01-02T00:00:00"
+
+
+class UnsupportedScalar:
+    pass
+
+
 def yahoo_row(close: str = "500") -> dict[str, str]:
     return {
         "Date": "2026-01-02",
@@ -115,6 +137,66 @@ class RawCaptureTests(TestCase):
         self.assertEqual(first.content_hash, second.content_hash)
         self.assertNotEqual(first.content_hash, different_request.content_hash)
         self.assertEqual(len(first.content_hash), 64)
+
+    def test_capture_canonicalizes_common_provider_scalar_types(self) -> None:
+        capture = RawCapture.from_records(
+            provider="fixture",
+            endpoint="daily",
+            request={"symbol": "QQQ"},
+            records=[
+                {
+                    "timestamp": datetime(2026, 1, 2, 12, tzinfo=UTC),
+                    "session": date(2026, 1, 2),
+                    "decimal": Decimal("1.25"),
+                    "enum": FixtureEnum.VALUE,
+                    "nested": [Decimal("2.5")],
+                    "item_scalar": ItemScalar(),
+                    "iso_scalar": IsoScalar(),
+                }
+            ],
+            captured_at=datetime(2026, 1, 2, 13, tzinfo=UTC),
+        )
+
+        record = capture.records[0]
+        self.assertEqual(record["timestamp"], "2026-01-02T12:00:00+00:00")
+        self.assertEqual(record["session"], "2026-01-02")
+        self.assertEqual(record["decimal"], "1.25")
+        self.assertEqual(record["enum"], "fixture-value")
+        self.assertEqual(record["nested"], ["2.5"])
+        self.assertEqual(record["item_scalar"], 7)
+        self.assertEqual(record["iso_scalar"], "2026-01-02T00:00:00")
+
+    def test_capture_rejects_non_finite_and_unsupported_values(self) -> None:
+        common = {
+            "provider": "fixture",
+            "endpoint": "daily",
+            "request": {"symbol": "QQQ"},
+            "captured_at": datetime(2026, 1, 2, tzinfo=UTC),
+        }
+        with self.assertRaisesRegex(ValueError, "decimals must be finite"):
+            RawCapture.from_records(records=[{"x": Decimal("NaN")}], **common)
+        with self.assertRaisesRegex(ValueError, "floats must be finite"):
+            RawCapture.from_records(records=[{"x": float("inf")}], **common)
+        with self.assertRaisesRegex(TypeError, "Unsupported raw capture value"):
+            RawCapture.from_records(records=[{"x": UnsupportedScalar()}], **common)
+
+    def test_capture_rejects_non_string_mapping_keys_and_naive_capture_time(self) -> None:
+        with self.assertRaisesRegex(TypeError, "mappings require string keys"):
+            RawCapture.from_records(
+                provider="fixture",
+                endpoint="daily",
+                request={"symbol": "QQQ"},
+                records=[{1: "bad-key"}],
+                captured_at=datetime(2026, 1, 2, tzinfo=UTC),
+            )
+        with self.assertRaises(ValidationError):
+            RawCapture.from_records(
+                provider="fixture",
+                endpoint="daily",
+                request={"symbol": "QQQ"},
+                records=[{"close": "500"}],
+                captured_at=datetime(2026, 1, 2),
+            )
 
     def test_yfinance_capture_is_replayable_without_second_network_call(self) -> None:
         client = FakeYFinanceClient([yahoo_row("500")])
