@@ -5,9 +5,11 @@ from quantverify.data.providers.akshare import (
     AkShareUSDailyProvider,
     USMarketSessionResolver,
 )
+from quantverify.data.providers.yfinance import YFinanceUSDailyProvider
 
 __all__ = [
     "AkShareAdjustment",
     "AkShareUSDailyProvider",
     "USMarketSessionResolver",
+    "YFinanceUSDailyProvider",
 ]

@@ -26,5 +26,7 @@ defensive_asset:
 data_policy:
   primary: tushare_us_daily_adj
   secondary: akshare_us_daily
+  additional_secondary:
+    - yfinance_us_daily_raw
   conflict_action: fail_or_manual_review
   derive_weekly_monthly_from_daily: true

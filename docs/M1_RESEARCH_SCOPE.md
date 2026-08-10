@@ -23,16 +23,23 @@ QQQ 不是 Nasdaq Composite，也不是 Nasdaq-100 原始指数。DIA 也不是 
 
 ### 2.1 数据源角色
 
-| 角色 | 接口 | 用途 |
+| 角色 | 接口 | 用途与准入状态 |
 |---|---|---|
-| Primary | Tushare Pro `us_daily_adj` | 美股复权日线生产候选源 |
-| Secondary | AkShare `stock_us_daily` / `stock_us_hist` | 独立聚合源交叉验证 |
+| Primary candidate | Tushare Pro `us_daily_adj` | 美股复权日线生产候选源；当前 token 未开通独立美股日线权限，因而 blocked |
+| Secondary | AkShare `stock_us_daily` / `stock_us_hist` | 独立聚合源交叉验证；仅 raw OHLC 可进入比较，当前 QQQ 覆盖缺口仍为 P0 |
+| P1 professional candidate | Massive REST `v1/open-close` | 已配置 API key；用于独立日线 OHLCV 验证。当前基础计划仅 EOD、两年历史，适合近期窗口，不能补齐 QQQ 的早期缺口 |
+| P1 public candidate | Alpha Vantage `TIME_SERIES_DAILY_ADJUSTED` | 可取得 raw OHLCV、adjusted close、拆分与分红事件的公开 API；接入前须以独立 API key、许可、限频、QQQ/DIA 覆盖和 corporate-action 窗口验证 |
+| P2 public secondary | `yfinance` / Yahoo Finance | 已配置 `yfinance.download` raw OHLCV adapter，并通过 QQQ/DIA 近期实数探针；仅限研究和交叉验证，Yahoo 条款为个人使用，不能成为生产唯一真相源 |
+| P2 official API candidate | Alpaca Market Data `StockHistoricalDataClient` | 官方 SDK；需要 key。Basic 计划美股历史自 2016 年起，适合近期窗口验证，不能补齐 QQQ 的早期缺口 |
+| Integration only | OpenBB Platform | 高活跃开源数据集成层，不是独立行情事实源；其底层 provider 必须分别存储并参与双源校验 |
 | Official anchor | Invesco / State Street | 标的身份、基金行动和关键冲突人工校验 |
 | Cash | FRED DFF/EFFR（M2） | 未投资现金收益；M1 fixture 可显式使用 0% |
 
 Tushare 官方文档说明 `us_daily_adj` 的复权因子可能因除权事件刷新。因此每次抓取必须保存不可变 raw snapshot 和内容哈希，不能只保存“最新复权历史”。AkShare 由公开网站聚合，作为验证源而不是无条件事实源。
 
-2026-08-10 的本机接口探针结果：base conda 中 AkShare 1.18.83 可获取 QQQ 与 DIA 的 raw/qfq 日线，最新 session 为 2026-08-07；当前返回的 QQQ 起点为 2001-01-02、DIA 起点为 2005-01-03。该起点明显不是基金身份意义上的成立日，只代表当前接口可见覆盖范围。Tushare 1.4.29 已安装，但当前进程未配置 token，尚未进行第二源实数对账。
+候选源在 2026-08-10 按可部署性、公开 SDK 的维护活跃度和 GitHub 社区规模复核：[Massive Python client](https://github.com/massive-com/client-python) 约 1.5k stars、上月有推送；[yfinance](https://github.com/ranaroussi/yfinance) 约 24.9k stars、两日内有推送；[Alpha Vantage Python wrapper](https://github.com/RomelTorres/alpha_vantage) 约 4.9k stars、两周内有推送；[Alpaca 的官方 Python SDK](https://github.com/alpacahq/alpaca-py) 约 1.45k stars、当日有推送；[OpenBB](https://github.com/OpenBB-finance/OpenBB) 约 71.7k stars、上月有推送。星数与活跃度只用于降低接入维护风险，不构成数据准确性或授权证明。[Massive 的日线文档](https://massive.com/docs/rest/stocks/aggregates/daily-ticker-summary)说明其基础计划为 EOD、两年历史，且默认 split-adjusted；[Alpha Vantage 文档](https://www.alphavantage.co/documentation/)承诺其 adjusted 日线包含 raw OHLCV、adjusted close 及拆分/分红事件；`yfinance` 明示其数据来自 Yahoo 的公开 API、仅供研究教育且 Yahoo API 限个人使用；[Alpaca Basic](https://docs.alpaca.markets/us/docs/about-market-data-api) 的美股历史覆盖自 2016 年起；OpenBB 也明示其聚合数据未必准确。因此，上述候选在通过本项目的 snapshot、许可、覆盖和双源 contract tests 前均不得替代 primary。
+
+2026-08-10 的本机接口探针结果：base conda 中 AkShare 1.18.83 可获取 QQQ 与 DIA 的 raw/qfq 日线，最新 session 为 2026-08-07；当前返回的 QQQ 起点为 2001-01-02、DIA 起点为 2005-01-03。该起点明显不是基金身份意义上的成立日，只代表当前接口可见覆盖范围。Tushare 1.4.29 已按供应商指定端点完成 `daily` 基线调用（13 行），但 `us_daily_adj` 仍被阻断；token 状态为有效、10,000 积分、无独立权限，而美股日线属于独立权限。隔离环境中的 yfinance 1.5.2 已使用 `auto_adjust=False`、`actions=False` 和 inclusive-range adapter 成功抓取 QQQ、DIA 在 2025-01-02 至 2025-01-10 的 raw OHLCV（各 6 个交易日），并完成长历史连通性探针：QQQ 为 1999-03-10 至 2026-08-07（6,896 行），DIA 为 1998-01-20 至 2026-08-07（7,182 行）。与 AkShare raw snapshot 的共同交易日收盘价对比中，DIA 5,432 日的最大相对差为 0.146%；QQQ 4,844 日的中位差约为 0、95 分位为 0.014871%，但 2002-11-01 有 2.851324% 的单日冲突，须保留为人工裁决样本。
 
 ### 2.2 校验口径
 
