@@ -8,3 +8,4 @@ ADR 记录已经接受、会影响多个模块或研究结论的技术决策。�
 
 - [ADR-0006：Raw Capture 与 Normalization 的单次抓取边界](0006-raw-capture-normalization-boundary.md)
 - [ADR-0007：Provider-agnostic CaptureStore](0007-provider-agnostic-capture-store.md)
+- [ADR-0008：Reference Result 不可变产物与运行清单](0008-immutable-reference-result-artifacts.md)
