@@ -19,7 +19,7 @@ from quantverify.core.models import DomainModel
 
 
 @dataclass(frozen=True)
-class _FrozenMapping(Mapping[str, Any]):
+class FrozenMapping(Mapping[str, Any]):
     """A recursively immutable mapping used inside the raw-capture seal."""
 
     _items: tuple[tuple[str, Any], ...]
@@ -36,12 +36,29 @@ class _FrozenMapping(Mapping[str, Any]):
     def __len__(self) -> int:
         return len(self._items)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return a detached mutable representation for serialization."""
+
+        thawed = _thaw_capture_value(self)
+        if not isinstance(thawed, dict):
+            raise TypeError("FrozenMapping did not thaw to a mapping")
+        return thawed
+
+    @classmethod
+    def from_value(cls, value: Any) -> FrozenMapping:
+        """Recursively freeze a mapping-like provider value."""
+
+        frozen = _freeze_capture_value(value)
+        if not isinstance(frozen, cls):
+            raise TypeError("value must be a mapping")
+        return frozen
+
 
 def _freeze_capture_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise TypeError("Raw capture mappings require string keys")
-        return _FrozenMapping(
+        return FrozenMapping(
             tuple((key, _freeze_capture_value(item)) for key, item in value.items())
         )
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -118,38 +135,38 @@ class RawCapture(DomainModel):
         arbitrary_types_allowed=True,
     )
 
-    provider: str = Field(min_length=1, max_length=128)
-    endpoint: str = Field(min_length=1, max_length=128)
-    request: _FrozenMapping
-    records: tuple[_FrozenMapping, ...]
+    provider: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    endpoint: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    request: FrozenMapping
+    records: tuple[FrozenMapping, ...]
     captured_at: datetime
     schema_version: str = Field(default="raw-capture-v1", min_length=1, max_length=64)
 
     @field_validator("request", mode="before")
     @classmethod
-    def freeze_request(cls, value: Any) -> _FrozenMapping:
-        frozen = _freeze_capture_value(value)
-        if not isinstance(frozen, _FrozenMapping):
-            raise TypeError("RawCapture request must be a mapping")
-        return frozen
+    def freeze_request(cls, value: Any) -> FrozenMapping:
+        try:
+            return FrozenMapping.from_value(value)
+        except TypeError as error:
+            raise TypeError("RawCapture request must be a mapping") from error
 
     @field_validator("records", mode="before")
     @classmethod
-    def freeze_records(cls, value: Any) -> tuple[_FrozenMapping, ...]:
+    def freeze_records(cls, value: Any) -> tuple[FrozenMapping, ...]:
         frozen = _freeze_capture_value(value)
         if not isinstance(frozen, tuple) or not all(
-            isinstance(record, _FrozenMapping) for record in frozen
+            isinstance(record, FrozenMapping) for record in frozen
         ):
             raise TypeError("RawCapture records must be a sequence of mappings")
         return frozen
 
     @field_serializer("request")
-    def serialize_request(self, value: _FrozenMapping) -> Mapping[str, Any]:
-        return cast(Mapping[str, Any], _thaw_capture_value(value))
+    def serialize_request(self, value: FrozenMapping) -> Mapping[str, Any]:
+        return value.to_dict()
 
     @field_serializer("records")
     def serialize_records(
-        self, value: tuple[_FrozenMapping, ...]
+        self, value: tuple[FrozenMapping, ...]
     ) -> list[Mapping[str, Any]]:
         return cast(list[Mapping[str, Any]], _thaw_capture_value(value))
 
@@ -165,6 +182,11 @@ class RawCapture(DomainModel):
     def content_hash(self) -> str:
         """Return full SHA-256 identity for request semantics plus response content."""
 
+        return hashlib.sha256(self.content_bytes()).hexdigest()
+
+    def content_document(self) -> dict[str, Any]:
+        """Return a detached canonical document for immutable persistence."""
+
         payload = canonicalize(
             {
                 "provider": self.provider,
@@ -174,13 +196,19 @@ class RawCapture(DomainModel):
                 "schema_version": self.schema_version,
             }
         )
-        serialized = json.dumps(
-            payload,
+        if not isinstance(payload, dict):
+            raise TypeError("RawCapture content document must be a mapping")
+        return payload
+
+    def content_bytes(self) -> bytes:
+        """Return the canonical bytes covered by ``content_hash``."""
+
+        return json.dumps(
+            self.content_document(),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        return hashlib.sha256(serialized).hexdigest()
 
     @classmethod
     def from_records(

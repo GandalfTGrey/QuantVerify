@@ -88,6 +88,6 @@ Recommended next PR:
 
 - Argus PR #7 建立 `RawCapture -> offline normalization` 边界；
 - T-5.6 的跟进审查验证嵌套内容是否真正不可变、schema drift 是否 fail closed；
-- 下一独立能力应是 provider-agnostic CaptureStore（Argus A2），不与 A1 审查修复混入同一实现提交。
+- provider-agnostic CaptureStore（Argus A2）由独立 stacked PR 实现，不与 A1 审查修复混入同一提交。
 
 协议本身是活文档。实质规则修改通过 PR 讨论；研究语义变化仍须使用 ADR。
