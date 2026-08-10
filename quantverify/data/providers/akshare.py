@@ -161,7 +161,7 @@ class AkShareUSDailyProvider:
         """Perform exactly one AkShare call and preserve the returned rows."""
 
         self._validate_request(asset, None, None)
-        request = {"symbol": asset.symbol, "adjust": adjustment.value}
+        request: dict[str, Any] = {"symbol": asset.symbol, "adjust": adjustment.value}
         response = self._get_client().stock_us_daily(**request)
         records = self._records_from(response)
         return RawCapture.from_records(
@@ -277,7 +277,8 @@ class AkShareUSDailyProvider:
         try:
             return AkShareAdjustment(str(adjust))
         except ValueError as error:
-            raise DataQualityError(f"capture has unsupported AkShare adjustment: {adjust!r}") from error
+            message = f"capture has unsupported AkShare adjustment: {adjust!r}"
+            raise DataQualityError(message) from error
 
     @staticmethod
     def _records_from(response: Any) -> tuple[Mapping[str, Any], ...]:
@@ -316,5 +317,7 @@ class AkShareUSDailyProvider:
                 f"AkShare row {index} has a non-numeric {field} value: {value!r}"
             ) from error
         if not parsed.is_finite():
-            raise DataQualityError(f"AkShare row {index} has a non-finite {field} value: {value!r}")
+            raise DataQualityError(
+                f"AkShare row {index} has a non-finite {field} value: {value!r}"
+            )
         return parsed
