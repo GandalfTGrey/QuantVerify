@@ -86,7 +86,7 @@ class YFinanceUSDailyProvider:
         """Perform exactly one provider request and preserve its provider-facing rows."""
 
         self._validate_request(asset, start, end)
-        request = {
+        request: dict[str, Any] = {
             "tickers": asset.symbol,
             "start": start.isoformat(),
             "end": (end + timedelta(days=1)).isoformat(),
@@ -138,9 +138,11 @@ class YFinanceUSDailyProvider:
                 )
             seen_sessions.add(session)
             if session < start or session > end:
-                raise DataQualityError(
-                    f"yfinance row {index} is outside requested inclusive range: {session.isoformat()}"
+                message = (
+                    f"yfinance row {index} is outside requested inclusive range: "
+                    f"{session.isoformat()}"
                 )
+                raise DataQualityError(message)
             selected_records.append((index, session, record))
 
         session_times = self._resolve_sessions(tuple(session for _, session, _ in selected_records))
@@ -270,5 +272,6 @@ class YFinanceUSDailyProvider:
                 f"yfinance row {index} has a non-numeric {field} value: {value!r}"
             ) from error
         if not parsed.is_finite():
-            raise DataQualityError(f"yfinance row {index} has a non-finite {field} value: {value!r}")
+            message = f"yfinance row {index} has a non-finite {field} value: {value!r}"
+            raise DataQualityError(message)
         return parsed
