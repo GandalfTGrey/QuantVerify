@@ -2,7 +2,8 @@
 
 > Status: Active
 > Adopted: 2026-08-10
-> Applies to: human owner、T-5.6、Argus 及后续具名贡献者
+> Last reviewed: 2026-08-11
+> Applies to: human owner、S-5.6、Argus、T-5.6 历史贡献及后续具名贡献者
 
 ## 1. 协作目标
 
@@ -13,10 +14,11 @@
 | 角色 | 主要职责 | 默认交付物 |
 |---|---|---|
 | 项目所有者 | 决定研究目标、风险偏好和最终裁决 | Issue/PR 中的明确决定 |
-| T-5.6 | 架构整合、实现、验证与项目推进 | 个人分支、测试、Draft PR |
+| S-5.6 | 技术负责人；架构裁决、质量门禁、任务编排与主线合并 | 个人集成分支、review、测试、合并决定 |
 | Argus | 数据谱系、量化研究正确性与审计 | ADR、数据调查、review、Draft PR |
+| T-5.6 | 已完成阶段性实现的历史贡献者；当前不新增提交 | 已有个人分支、测试与 Draft PR |
 
-角色不形成“谁总是正确”的优先级。发生冲突时继续遵守 ADR-0001 的文档优先级和 fail-closed 原则。
+项目所有者保留最终裁决权。S-5.6 对进入 `main` 的技术完整性和合并顺序负责，但任何角色都不能仅凭身份覆盖可复现证据、ADR-0001 的文档优先级或 fail-closed 原则。
 
 ## 2. 使用什么渠道
 
@@ -50,6 +52,7 @@ Issue、PR 描述或协作评论至少包含：
 - 未经分支所有者同意，不 force-push 其分支；
 - PR 保持 Draft，直到依赖、关键异议和 CI 均已解决；
 - 合并顺序从栈底到栈顶；底层合并后及时把上层 PR base 调整到新的稳定基线；
+- 当长堆叠已形成严格线性历史且逐层合并会制造重复或失真时，S-5.6 可建立面向 `main` 的集成分支；集成 PR 必须保留原提交与署名、通过完整 diff 审查和 CI，并在合并后说明哪些 Draft PR 被替代；
 - 工作区存在无关或未跟踪用户文件时，显式逐文件暂存。
 
 ## 5. Review 严重性与处理
@@ -87,7 +90,9 @@ Recommended next PR:
 ## 8. 当前协作起点
 
 - Argus PR #7 建立 `RawCapture -> offline normalization` 边界；
-- T-5.6 的跟进审查验证嵌套内容是否真正不可变、schema drift 是否 fail closed；
-- provider-agnostic CaptureStore（Argus A2）由独立 stacked PR 实现，不与 A1 审查修复混入同一提交。
+- T-5.6 PR #8 修复嵌套不可变性和 schema drift，并建立本协议；
+- T-5.6 PR #9 实现 provider-agnostic CaptureStore（A2）；
+- S-5.6 负责把线性提交链审查并集成到 `main`，同时保持原作者提交历史；
+- Argus Issue #10 负责 Quality Suite v2，Issue #11 负责 CaptureStore 独立对抗审计。
 
 协议本身是活文档。实质规则修改通过 PR 讨论；研究语义变化仍须使用 ADR。

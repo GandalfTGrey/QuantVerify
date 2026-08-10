@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from itertools import pairwise
 from typing import Annotated
 
 from pydantic import Field
@@ -86,6 +87,8 @@ class LongFlatReferenceEngine:
         asset = bars[0].asset
         if any(bar.asset != asset for bar in bars):
             raise DataQualityError("Reference engine bars must contain one identical asset")
+        if any(left.session >= right.session for left, right in pairwise(bars)):
+            raise DataQualityError("Reference engine bars must be strictly ordered by session")
         if any(target.asset != asset for target in targets):
             raise DataQualityError("Reference engine targets must match the bar asset")
 

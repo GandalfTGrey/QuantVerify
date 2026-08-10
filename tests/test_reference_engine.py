@@ -1,6 +1,7 @@
 from decimal import Decimal
 from unittest import TestCase
 
+from quantverify.core.exceptions import DataQualityError
 from quantverify.engines.reference import LongFlatReferenceEngine, TradeSide
 from quantverify.metrics import maximum_drawdown, total_return
 from quantverify.strategies import price_above_sma_targets
@@ -49,3 +50,15 @@ class ReferenceEngineGoldenTests(TestCase):
         self.assertLess(costly.final_equity, free.final_equity)
         self.assertGreater(costly.total_commission, 0)
         self.assertGreater(costly.total_slippage, 0)
+
+    def test_rejects_out_of_order_or_duplicate_bars(self) -> None:
+        invalid_sequences = (
+            (self.bars[1], self.bars[0]),
+            (self.bars[0], self.bars[0]),
+        )
+        for bars in invalid_sequences:
+            with (
+                self.subTest(sessions=tuple(bar.session for bar in bars)),
+                self.assertRaisesRegex(DataQualityError, "strictly ordered by session"),
+            ):
+                self.engine.run(bars, (), initial_cash=Decimal("10300"))

@@ -158,7 +158,7 @@ Bronze/raw 层优先保留 provider-native 信息。不得为了方便 normalize
 
 真实市场数据质量 gate 与 reference-engine correctness gate 分离。真实 QQQ/DIA 冲突不能阻塞 fixture 驱动的 engine validation。
 
-### A1 — Raw Capture -> Normalize Boundary（当前进行中）
+### A1 — Raw Capture -> Normalize Boundary（已完成，待集成）
 
 目标：一次 provider fetch 产生唯一 capture；raw snapshot 和 normalized data 来自同一对象。
 
@@ -170,13 +170,19 @@ Bronze/raw 层优先保留 provider-native 信息。不得为了方便 normalize
 - snapshot manifest 可指向该 capture；
 - regression test 证明不能出现“保存 A、回测 B”。
 
-### A2 — Provider-agnostic Capture Manifest
+实现位于 Argus PR #7，T-5.6 PR #8 完成嵌套不可变性和 schema drift 审查。
+
+### A2 — Provider-agnostic Capture Manifest（已完成，待独立审计）
 
 将当前 AkShare-specific snapshot writer 重构为通用 CaptureStore，记录 request、provider/adapter version、capture timestamp、schema/hash 和许可 profile。
 
-### A3 — Quality Suite v2
+实现位于 T-5.6 PR #9；独立对抗审计由 Argus Issue #11 跟踪。完成实现不等于已证明并发写入与崩溃恢复安全。
+
+### A3 — Quality Suite v2（已分配）
 
 把 close-only cross-source validator 拆成 schema/calendar/coverage/OHLC/revision/cross-source/corporate-action 等模块化检查。
+
+详细验收边界由 Argus Issue #10 跟踪。交付必须绑定 capture/manifest identity、支持区间级准入并可完全离线复现。
 
 ### A4 — Dataset Release + Range-scoped Eligibility
 

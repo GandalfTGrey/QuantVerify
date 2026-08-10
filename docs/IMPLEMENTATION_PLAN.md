@@ -1,6 +1,6 @@
 # QuantVerify 技术实施与项目计划
 
-> 计划基线：2026-08-10
+> 计划基线：2026-08-11
 > 方法：Vertical Slice + milestone exit criteria
 > 估算单位：1 engineer-day（专注开发日），用于排序和容量规划，不是日期承诺
 
@@ -14,7 +14,7 @@
 
 | 工作项 | 状态 | 说明 |
 |---|---|---|
-| 仓库与开发分支 | Done | 已在 `agent/foundation-architecture` 开始 |
+| 仓库与开发分支 | Done | 具名贡献者个人分支 + S-5.6 集成门禁 |
 | 架构 v0.2 | Done | 补齐 causal/PIT/portfolio/identity/governance |
 | 架构审查 | Done | 严重度、风险和处置已记录 |
 | Python package baseline | Done | `pyproject.toml`、package、gitignore |
@@ -26,13 +26,18 @@
 | 研究守则整合 | Done | Data Integrity、Research Protocol、Strategy Universe |
 | Initial ADR set | Done | precedence、timing、identity、dual-source validation |
 | Golden signal fixture | Done | 手算 SMA3、warm-up、T+1 target、causality regression |
-| Reference engine、storage | Next | M1 的下一条 vertical slice |
+| Reference engine v1 | Done | long/flat、next-open、成本与逐期 equity golden tests |
+| RawCapture boundary | Done | 一次抓取、深度不可变、离线 normalization |
+| CaptureStore A2 | Done / Audit | content-addressed capture/manifest；Argus Issue #11 独立审计 |
+| Quality Suite v2 | Assigned | Argus Issue #10；区间级准入与离线质量证据 |
+| 真实市场数据准入 | Blocked | AkShare 美股历史缺口；Tushare 无美股权限；尚无 Gold dataset |
+| S-5.6 主线集成 | In progress | 全量审查、CI、单一 integration PR、合并后关闭被替代 Draft PR |
 
 ## 3. Milestone 0 — Foundation
 
 目标：冻结首个可编码的研究契约，使后续 adapter 不会各自定义语义。
 
-预计：4-6 engineer-days；M0-01 至 M0-08 已完成，等待 CI 通过后退出 M0。
+预计：4-6 engineer-days；M0-01 至 M0-08 已完成。最终以 S-5.6 集成 PR 合并并通过主线 CI 作为退出记录。
 
 ### 工作包
 
@@ -199,11 +204,13 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 
 首批 ADR：
 
-- ADR-0001 Modular monolith + hexagonal ports；
+- ADR-0001 架构治理与文档优先级；
 - ADR-0002 causal timing and execution semantics；
 - ADR-0003 content-addressed experiment/run/artifact identity；
-- ADR-0004 Parquet artifacts + DuckDB catalog；
-- ADR-0005 reference engine and VectorBT adapter validation。
+- ADR-0004 dual-source data validation；
+- ADR-0005 AkShare ingestion boundary；
+- ADR-0006 RawCapture normalization boundary；
+- ADR-0007 provider-agnostic CaptureStore。
 
 ### 项目管理
 
@@ -213,27 +220,20 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 - 技术债必须注明影响的研究正确性或交付速度；
 - 任何“结果异常优秀”优先按 bug/偏差排查。
 
-## 12. 建议的第一批 Issues
+## 12. 当前下一批 Issues
 
-1. `foundation: add CI for lint, typing and tests`
-2. `config: load and validate versioned experiment YAML`
-3. `data: define Bar v1 schema and golden fixture`
-4. `features: implement causal SMA with warm-up policy`
-5. `strategy: implement SMA crossover signals`
-6. `portfolio: map signals to lagged long/flat targets`
-7. `engine: build transparent reference engine`
-8. `metrics: define and implement metrics v1`
-9. `artifacts: write immutable Parquet run outputs`
-10. `application: execute one experiment end to end`
-11. `engine: reconcile VectorBT adapter against golden results`
-12. `docs: add initial ADR set and research protocol`
+1. `#10 Argus A3: implement range-scoped Quality Suite v2`
+2. `#11 Argus independent audit: adversarially verify CaptureStore A2`
+3. `A4: DatasetRelease + range-scoped experiment preflight`（依赖 #10）
+4. `M1-07: Artifact writer + immutable run manifest`
+5. `M1-08: experiment service / CLI`（依赖 M1-07）
 
 ## 13. 已确认的产品与工程决策
 
 | ID | 决策 | 当前基线 |
 |---|---|---|
-| D1 | 首期资产 | QQQ（Nasdaq-100 ETF）与 DIA（DJIA ETF） |
-| D2 | 数据源 | Tushare Pro 为主、AkShare 为交叉验证；冲突不静默择一 |
+| D1 | 首期资产 | 美股目标保留 QQQ/DIA；中国双源实验候选为 510300、159915、600519、000001，准入前不固化最终 universe |
+| D2 | 数据源 | 中国候选使用 Tushare + AkShare；美股调查使用 AkShare + yfinance；在质量 gate 通过前不指定 primary，不混合冲突值 |
 | D3 | 默认执行 | 日/周/月周期均在 period close 决策，下一交易日开盘执行，lag >= 1 |
 | D4 | 仓位 | long/flat；不做空、不加杠杆、不做多币种，base currency = USD |
 | D5 | 产品形态 | Mac M1 本地单用户 modular monolith |
@@ -245,7 +245,7 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 
 ## 14. 当前外部依赖与下一步
 
-- base conda 已确认存在 AkShare 1.18.83、Tushare 1.4.29、pandas 2.2.3、NumPy 2.2.3；
-- 当前环境尚未发现 Tushare token；接入真实 Tushare 数据前需通过 `TUSHARE_TOKEN` 配置，禁止写入 Git；
-- M0 的 ADR 与 golden fixture 已完成；下一步进入 reference engine、metrics 和 immutable artifacts；
+- base conda 已确认可使用 AkShare、Tushare、pandas 与 NumPy；项目开发依赖按 `pyproject.toml` 安装；
+- Tushare 凭据仅通过本地忽略配置使用，已验证中国日线接口可调用，但没有美股权限；凭据及响应数据不得因测试便利进入 Git；
+- M0、reference engine、RawCapture 与 CaptureStore 已完成；下一步由 S-5.6 推进 immutable run artifacts，由 Argus 并行推进 #10/#11；
 - QQQ 是 Nasdaq-100 ETF，不代表 Nasdaq Composite；若目标实际是 Nasdaq Composite，应把 QQQ 改为 ONEQ 并重新冻结 asset identity。
