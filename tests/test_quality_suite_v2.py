@@ -134,7 +134,11 @@ def test_historical_conflict_outside_requested_range_remains_visible() -> None:
         request_char="f",
     )
     report = evaluate([left, right], [old, current], start=current, end=current)
-    cross = next(result for result in report.check_results if result.check_id == "cross_source_ohlc")
+    cross = next(
+        result
+        for result in report.check_results
+        if result.check_id == "cross_source_ohlc"
+    )
 
     assert cross.status is CheckStatus.FAIL
     assert any(
@@ -236,7 +240,11 @@ def test_duplicate_session_blocks_requested_range() -> None:
     report = evaluate([data], [session], start=session, end=session)
 
     assert report.eligibility.status is EligibilityStatus.INELIGIBLE
-    check = next(result for result in report.check_results if result.check_id == "session_integrity")
+    check = next(
+        result
+        for result in report.check_results
+        if result.check_id == "session_integrity"
+    )
     assert check.status is CheckStatus.FAIL
 
 
