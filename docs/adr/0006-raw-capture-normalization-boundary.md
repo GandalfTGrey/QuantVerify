@@ -34,6 +34,8 @@ DataRequest
 5. snapshot / manifest 后续必须引用对应 capture 的 content hash；
 6. provider-native raw 信息应优先保留，canonical field pruning 只能发生在 normalization 层或明确的 adapter-canonical capture schema 中；
 7. provider request 参数属于 capture identity/provenance 的组成部分，credential 除外。
+8. capture 的 request、records 及其所有嵌套容器必须递归只读；序列化并重放后仍须保持该约束；
+9. normalizer 只接受自身明确支持的 capture schema version，未知版本必须 fail closed。
 
 ## Initial Implementation Scope
 

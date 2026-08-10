@@ -208,7 +208,7 @@ class AkShareUSDailyProvider:
 
         session_times = self._resolve_sessions(tuple(session for _, session, _ in selected_records))
         bars: list[NormalizedBar] = []
-        for index, session, record in selected_records:
+        for index, session, selected_record in selected_records:
             session_open_at, session_close_at = session_times[session]
             try:
                 bar = NormalizedBar(
@@ -217,11 +217,11 @@ class AkShareUSDailyProvider:
                     session_open_at=session_open_at,
                     session_close_at=session_close_at,
                     available_at=session_close_at,
-                    open=self._parse_decimal(record["open"], "open", index),
-                    high=self._parse_decimal(record["high"], "high", index),
-                    low=self._parse_decimal(record["low"], "low", index),
-                    close=self._parse_decimal(record["close"], "close", index),
-                    volume=self._parse_decimal(record["volume"], "volume", index),
+                    open=self._parse_decimal(selected_record["open"], "open", index),
+                    high=self._parse_decimal(selected_record["high"], "high", index),
+                    low=self._parse_decimal(selected_record["low"], "low", index),
+                    close=self._parse_decimal(selected_record["close"], "close", index),
+                    volume=self._parse_decimal(selected_record["volume"], "volume", index),
                     source=f"{self.source_name}:{adjustment.name.lower()}",
                 )
             except ValidationError as error:
@@ -271,6 +271,10 @@ class AkShareUSDailyProvider:
     def _validate_capture(asset: AssetId, capture: RawCapture) -> AkShareAdjustment:
         if capture.provider != "akshare" or capture.endpoint != "stock_us_daily":
             raise DataQualityError("capture does not belong to the AkShare stock_us_daily adapter")
+        if capture.schema_version != AkShareUSDailyProvider.capture_schema_version:
+            raise DataQualityError(
+                f"unsupported AkShare capture schema: {capture.schema_version!r}"
+            )
         if capture.request.get("symbol") != asset.symbol:
             raise DataQualityError("capture symbol does not match requested asset")
         adjust = capture.request.get("adjust")

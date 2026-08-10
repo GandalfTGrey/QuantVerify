@@ -9,6 +9,7 @@ from unittest import TestCase
 from pydantic import ValidationError
 
 from quantverify.core.enums import AssetClass
+from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import AssetId
 from quantverify.data.capture import RawCapture
 from quantverify.data.providers.akshare import AkShareUSDailyProvider
@@ -162,9 +163,46 @@ class RawCaptureTests(TestCase):
         self.assertEqual(record["session"], "2026-01-02")
         self.assertEqual(record["decimal"], "1.25")
         self.assertEqual(record["enum"], "fixture-value")
-        self.assertEqual(record["nested"], ["2.5"])
+        self.assertEqual(record["nested"], ("2.5",))
         self.assertEqual(record["item_scalar"], 7)
         self.assertEqual(record["iso_scalar"], "2026-01-02T00:00:00")
+
+    def test_capture_is_deeply_immutable_and_hash_stays_sealed(self) -> None:
+        capture = RawCapture.from_records(
+            provider="fixture",
+            endpoint="daily",
+            request={"symbol": "QQQ", "options": {"adjust": False}},
+            records=[{"close": "500", "tags": ["raw"]}],
+            captured_at=datetime(2026, 1, 2, 13, tzinfo=UTC),
+        )
+        content_hash = capture.content_hash
+
+        with self.assertRaises(TypeError):
+            capture.request["symbol"] = "DIA"  # type: ignore[index]
+        with self.assertRaises(TypeError):
+            capture.request["options"]["adjust"] = True  # type: ignore[index]
+        with self.assertRaises(TypeError):
+            capture.records[0]["close"] = "999"  # type: ignore[index]
+        with self.assertRaises(TypeError):
+            capture.records[0]["tags"][0] = "revised"  # type: ignore[index]
+
+        self.assertEqual(capture.content_hash, content_hash)
+        self.assertEqual(capture.records[0]["close"], "500")
+
+    def test_capture_round_trips_through_json_without_losing_the_seal(self) -> None:
+        capture = RawCapture.from_records(
+            provider="fixture",
+            endpoint="daily",
+            request={"symbol": "QQQ"},
+            records=[{"close": "500"}],
+            captured_at=datetime(2026, 1, 2, 13, tzinfo=UTC),
+        )
+
+        restored = RawCapture.model_validate_json(capture.model_dump_json())
+
+        self.assertEqual(restored.content_hash, capture.content_hash)
+        with self.assertRaises(TypeError):
+            restored.records[0]["close"] = "999"  # type: ignore[index]
 
     def test_capture_rejects_non_finite_and_unsupported_values(self) -> None:
         common = {
@@ -242,3 +280,35 @@ class RawCaptureTests(TestCase):
         provider.load_daily(ASSET, start=date(2026, 1, 2), end=date(2026, 1, 2))
 
         self.assertEqual(client.calls, 1)
+
+    def test_normalizers_reject_capture_schema_drift(self) -> None:
+        akshare_capture = RawCapture.from_records(
+            provider="akshare",
+            endpoint="stock_us_daily",
+            request={"symbol": "QQQ", "adjust": ""},
+            records=[akshare_row()],
+            captured_at=datetime(2026, 1, 2, tzinfo=UTC),
+            schema_version="akshare-future-v2",
+        )
+        yahoo_capture = RawCapture.from_records(
+            provider="yfinance",
+            endpoint="download",
+            request={"tickers": "QQQ"},
+            records=[yahoo_row()],
+            captured_at=datetime(2026, 1, 2, tzinfo=UTC),
+            schema_version="yfinance-future-v2",
+        )
+
+        with self.assertRaisesRegex(DataQualityError, "unsupported AkShare capture schema"):
+            AkShareUSDailyProvider(
+                FakeAkShareClient([]), FixtureSessionResolver()
+            ).normalize_daily(ASSET, akshare_capture)
+        with self.assertRaisesRegex(DataQualityError, "unsupported yfinance capture schema"):
+            YFinanceUSDailyProvider(
+                FakeYFinanceClient([]), FixtureSessionResolver()
+            ).normalize_daily(
+                ASSET,
+                yahoo_capture,
+                start=date(2026, 1, 2),
+                end=date(2026, 1, 2),
+            )

@@ -218,6 +218,10 @@ class YFinanceUSDailyProvider:
     def _validate_capture(asset: AssetId, capture: RawCapture) -> None:
         if capture.provider != "yfinance" or capture.endpoint != "download":
             raise DataQualityError("capture does not belong to the yfinance download adapter")
+        if capture.schema_version != YFinanceUSDailyProvider.capture_schema_version:
+            raise DataQualityError(
+                f"unsupported yfinance capture schema: {capture.schema_version!r}"
+            )
         if capture.request.get("tickers") != asset.symbol:
             raise DataQualityError("capture ticker does not match requested asset")
 

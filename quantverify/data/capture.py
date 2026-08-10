@@ -5,16 +5,56 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from quantverify.core.identity import canonicalize
 from quantverify.core.models import DomainModel
+
+
+@dataclass(frozen=True)
+class _FrozenMapping(Mapping[str, Any]):
+    """A recursively immutable mapping used inside the raw-capture seal."""
+
+    _items: tuple[tuple[str, Any], ...]
+
+    def __getitem__(self, key: str) -> Any:
+        for candidate, value in self._items:
+            if candidate == key:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (key for key, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+def _freeze_capture_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("Raw capture mappings require string keys")
+        return _FrozenMapping(
+            tuple((key, _freeze_capture_value(item)) for key, item in value.items())
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(_freeze_capture_value(item) for item in value)
+    return value
+
+
+def _thaw_capture_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_capture_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_thaw_capture_value(item) for item in value]
+    return value
 
 
 def _capture_value(value: Any) -> Any:
@@ -71,12 +111,47 @@ class RawCapture(DomainModel):
     ``NormalizedBar`` instances. Normalization is a separate, offline step.
     """
 
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        str_strip_whitespace=True,
+        arbitrary_types_allowed=True,
+    )
+
     provider: str = Field(min_length=1, max_length=128)
     endpoint: str = Field(min_length=1, max_length=128)
-    request: Mapping[str, Any]
-    records: tuple[Mapping[str, Any], ...]
+    request: _FrozenMapping
+    records: tuple[_FrozenMapping, ...]
     captured_at: datetime
     schema_version: str = Field(default="raw-capture-v1", min_length=1, max_length=64)
+
+    @field_validator("request", mode="before")
+    @classmethod
+    def freeze_request(cls, value: Any) -> _FrozenMapping:
+        frozen = _freeze_capture_value(value)
+        if not isinstance(frozen, _FrozenMapping):
+            raise TypeError("RawCapture request must be a mapping")
+        return frozen
+
+    @field_validator("records", mode="before")
+    @classmethod
+    def freeze_records(cls, value: Any) -> tuple[_FrozenMapping, ...]:
+        frozen = _freeze_capture_value(value)
+        if not isinstance(frozen, tuple) or not all(
+            isinstance(record, _FrozenMapping) for record in frozen
+        ):
+            raise TypeError("RawCapture records must be a sequence of mappings")
+        return frozen
+
+    @field_serializer("request")
+    def serialize_request(self, value: _FrozenMapping) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], _thaw_capture_value(value))
+
+    @field_serializer("records")
+    def serialize_records(
+        self, value: tuple[_FrozenMapping, ...]
+    ) -> list[Mapping[str, Any]]:
+        return cast(list[Mapping[str, Any]], _thaw_capture_value(value))
 
     @model_validator(mode="after")
     def validate_capture(self) -> RawCapture:
