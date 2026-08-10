@@ -29,9 +29,9 @@ from quantverify.data.quality.policy import QualityPolicy
 
 _CHECK_VERSION = "1"
 _PRICE_FIELDS = ("open", "high", "low", "close")
-
 _INELIGIBLE_CODES = frozenset(
     {
+        "cross_source_field_conflict",
         "duplicate_session",
         "invalid_ohlc",
         "negative_volume",
@@ -39,7 +39,6 @@ _INELIGIBLE_CODES = frozenset(
         "non_monotonic_sessions",
         "non_positive_price",
         "unexpected_session",
-        "cross_source_field_conflict",
     }
 )
 _INCOMPLETE_CODES = frozenset(
@@ -51,7 +50,7 @@ _INCOMPLETE_CODES = frozenset(
 
 
 class QualitySuite:
-    """Evaluate already captured/normalized market data without provider access."""
+    """Evaluate captured and normalized market data without provider access."""
 
     def evaluate(
         self,
@@ -73,7 +72,9 @@ class QualitySuite:
             raise DataQualityError("quality evaluation requires at least one source")
 
         active_policy = policy or QualityPolicy()
-        ordered_sources = tuple(sorted(sources, key=lambda source: source.evidence.evidence_id))
+        ordered_sources = tuple(
+            sorted(sources, key=lambda source: source.evidence.evidence_id)
+        )
         self._validate_assets(asset, ordered_sources)
         expected = tuple(sorted(set(expected_sessions)))
         ordered_revisions = tuple(
@@ -85,12 +86,7 @@ class QualitySuite:
                 ),
             )
         )
-
-        all_sessions = [
-            bar.session
-            for source in ordered_sources
-            for bar in source.bars
-        ]
+        all_sessions = [bar.session for source in ordered_sources for bar in source.bars]
         observed_start = min(all_sessions) if all_sessions else requested_start
         observed_end = max(all_sessions) if all_sessions else requested_end
         context = QualityEvaluationContext(
@@ -126,9 +122,7 @@ class QualitySuite:
             self._adjustment_semantics(adjustment_mode),
         )
         findings = tuple(
-            finding
-            for result in results
-            for finding in result.findings
+            finding for result in results for finding in result.findings
         )
         eligibility = self._evaluate_range(
             findings,
@@ -157,11 +151,10 @@ class QualitySuite:
             "schema_contract",
             (),
             {
-                "source_count": len(sources),
                 "capture_schema_versions": [
-                    source.evidence.capture_schema_version
-                    for source in sources
+                    source.evidence.capture_schema_version for source in sources
                 ],
+                "source_count": len(sources),
             },
         )
 
@@ -173,27 +166,27 @@ class QualitySuite:
             for session in sorted(day for day, count in counts.items() if count > 1):
                 findings.append(
                     self._finding(
-                        check_id="session_integrity",
-                        severity=FindingSeverity.ERROR,
-                        code="duplicate_session",
-                        start=session,
-                        end=session,
+                        "session_integrity",
+                        FindingSeverity.ERROR,
+                        "duplicate_session",
+                        session,
+                        session,
+                        "duplicate market session",
                         source_ids=(source.evidence.evidence_id,),
                         values={"count": counts[session]},
-                        message=f"duplicate market session: {session.isoformat()}",
                     )
                 )
             if sessions and sessions != sorted(sessions):
                 findings.append(
                     self._finding(
-                        check_id="session_integrity",
-                        severity=FindingSeverity.ERROR,
-                        code="non_monotonic_sessions",
-                        start=min(sessions),
-                        end=max(sessions),
+                        "session_integrity",
+                        FindingSeverity.ERROR,
+                        "non_monotonic_sessions",
+                        min(sessions),
+                        max(sessions),
+                        "source sessions are not monotonically increasing",
                         source_ids=(source.evidence.evidence_id,),
                         values={"record_count": len(sessions)},
-                        message="source sessions are not monotonically increasing",
                     )
                 )
         return self._result(
@@ -205,47 +198,44 @@ class QualitySuite:
     def _ohlc_integrity(self, sources: Sequence[QualitySourceData]) -> CheckResult:
         findings: list[QualityFinding] = []
         for source in sources:
+            evidence_id = source.evidence.evidence_id
             for bar in source.bars:
-                values = {
-                    field: self._decimal(getattr(bar, field))
-                    for field in _PRICE_FIELDS
+                parsed = {
+                    field: self._decimal(getattr(bar, field)) for field in _PRICE_FIELDS
                 }
-                for field, value in values.items():
+                for field, value in parsed.items():
                     if value is None:
                         findings.append(
                             self._finding(
-                                check_id="ohlc_integrity",
-                                severity=FindingSeverity.BLOCKER,
-                                code="non_finite_field",
-                                start=bar.session,
-                                end=bar.session,
+                                "ohlc_integrity",
+                                FindingSeverity.BLOCKER,
+                                "non_finite_field",
+                                bar.session,
+                                bar.session,
+                                f"{field} is not a finite decimal",
                                 field=field,
-                                source_ids=(source.evidence.evidence_id,),
+                                source_ids=(evidence_id,),
                                 values={"value": str(getattr(bar, field))},
-                                message=f"{field} is not a finite decimal",
                             )
                         )
                     elif value <= 0:
                         findings.append(
                             self._finding(
-                                check_id="ohlc_integrity",
-                                severity=FindingSeverity.BLOCKER,
-                                code="non_positive_price",
-                                start=bar.session,
-                                end=bar.session,
+                                "ohlc_integrity",
+                                FindingSeverity.BLOCKER,
+                                "non_positive_price",
+                                bar.session,
+                                bar.session,
+                                f"{field} must be positive",
                                 field=field,
-                                source_ids=(source.evidence.evidence_id,),
+                                source_ids=(evidence_id,),
                                 values={"value": format(value, "f")},
-                                message=f"{field} must be positive",
                             )
                         )
-
-                if any(value is None for value in values.values()):
+                values = tuple(parsed[field] for field in _PRICE_FIELDS)
+                if any(value is None for value in values):
                     continue
-                open_price = values["open"]
-                high = values["high"]
-                low = values["low"]
-                close = values["close"]
+                open_price, high, low, close = values
                 if (
                     open_price is None
                     or high is None
@@ -253,22 +243,23 @@ class QualitySuite:
                     or close is None
                 ):
                     continue
-                if high < low or not low <= open_price <= high or not low <= close <= high:
+                valid = high >= low and low <= open_price <= high and low <= close <= high
+                if not valid:
                     findings.append(
                         self._finding(
-                            check_id="ohlc_integrity",
-                            severity=FindingSeverity.BLOCKER,
-                            code="invalid_ohlc",
-                            start=bar.session,
-                            end=bar.session,
-                            source_ids=(source.evidence.evidence_id,),
+                            "ohlc_integrity",
+                            FindingSeverity.BLOCKER,
+                            "invalid_ohlc",
+                            bar.session,
+                            bar.session,
+                            "OHLC ordering is internally inconsistent",
+                            source_ids=(evidence_id,),
                             values={
-                                "open": format(open_price, "f"),
+                                "close": format(close, "f"),
                                 "high": format(high, "f"),
                                 "low": format(low, "f"),
-                                "close": format(close, "f"),
+                                "open": format(open_price, "f"),
                             },
-                            message="OHLC ordering is internally inconsistent",
                         )
                     )
         return self._result(
@@ -280,34 +271,35 @@ class QualitySuite:
     def _volume_integrity(self, sources: Sequence[QualitySourceData]) -> CheckResult:
         findings: list[QualityFinding] = []
         for source in sources:
+            evidence_id = source.evidence.evidence_id
             for bar in source.bars:
                 volume = self._decimal(bar.volume)
                 if volume is None:
                     findings.append(
                         self._finding(
-                            check_id="volume_integrity",
-                            severity=FindingSeverity.BLOCKER,
-                            code="non_finite_field",
-                            start=bar.session,
-                            end=bar.session,
+                            "volume_integrity",
+                            FindingSeverity.BLOCKER,
+                            "non_finite_field",
+                            bar.session,
+                            bar.session,
+                            "volume is not a finite decimal",
                             field="volume",
-                            source_ids=(source.evidence.evidence_id,),
+                            source_ids=(evidence_id,),
                             values={"value": str(bar.volume)},
-                            message="volume is not a finite decimal",
                         )
                     )
                 elif volume < 0:
                     findings.append(
                         self._finding(
-                            check_id="volume_integrity",
-                            severity=FindingSeverity.BLOCKER,
-                            code="negative_volume",
-                            start=bar.session,
-                            end=bar.session,
+                            "volume_integrity",
+                            FindingSeverity.BLOCKER,
+                            "negative_volume",
+                            bar.session,
+                            bar.session,
+                            "volume must be non-negative",
                             field="volume",
-                            source_ids=(source.evidence.evidence_id,),
+                            source_ids=(evidence_id,),
                             values={"value": format(volume, "f")},
-                            message="volume must be non-negative",
                         )
                     )
         return self._result(
@@ -325,22 +317,20 @@ class QualitySuite:
         findings: list[QualityFinding] = []
         for source in sources:
             for bar in source.bars:
-                if bar.session not in expected:
-                    findings.append(
-                        self._finding(
-                            check_id="calendar_membership",
-                            severity=FindingSeverity.ERROR,
-                            code="unexpected_session",
-                            start=bar.session,
-                            end=bar.session,
-                            source_ids=(source.evidence.evidence_id,),
-                            values={"calendar_member": False},
-                            message=(
-                                f"bar session {bar.session.isoformat()} is not in "
-                                "the supplied exchange calendar"
-                            ),
-                        )
+                if bar.session in expected:
+                    continue
+                findings.append(
+                    self._finding(
+                        "calendar_membership",
+                        FindingSeverity.ERROR,
+                        "unexpected_session",
+                        bar.session,
+                        bar.session,
+                        "bar session is not in the supplied exchange calendar",
+                        source_ids=(source.evidence.evidence_id,),
+                        values={"calendar_member": False},
                     )
+                )
         return self._result(
             "calendar_membership",
             findings,
@@ -359,14 +349,14 @@ class QualitySuite:
             for start, end, count in self._missing_intervals(expected_sessions, missing):
                 findings.append(
                     self._finding(
-                        check_id="source_coverage",
-                        severity=FindingSeverity.WARNING,
-                        code="source_missing_session",
-                        start=start,
-                        end=end,
+                        "source_coverage",
+                        FindingSeverity.WARNING,
+                        "source_missing_session",
+                        start,
+                        end,
+                        "source is missing one or more expected sessions",
                         source_ids=(source.evidence.evidence_id,),
                         values={"missing_count": count},
-                        message="source is missing one or more expected sessions",
                     )
                 )
         return self._result(
@@ -388,124 +378,128 @@ class QualitySuite:
             for session in expected_sessions
             if requested_start <= session <= requested_end
         )
-        source_sessions = [
-            {bar.session for bar in source.bars}
-            for source in sources
-        ]
-        insufficient: dict[str, set[date]] = {
-            "insufficient_session_coverage": set(),
-            "insufficient_source_verification": set(),
+        source_sessions = [{bar.session for bar in source.bars} for source in sources]
+        counts = {
+            session: sum(session in observed for observed in source_sessions)
+            for session in expected
         }
-        counts: dict[date, int] = {}
-        for session in expected:
-            observed_count = sum(session in sessions for sessions in source_sessions)
-            counts[session] = observed_count
-            if observed_count < policy.minimum_sources_per_session:
-                if observed_count == 0:
-                    insufficient["insufficient_session_coverage"].add(session)
-                else:
-                    insufficient["insufficient_source_verification"].add(session)
-
+        missing_all = {session for session, count in counts.items() if count == 0}
+        insufficient_verify = {
+            session
+            for session, count in counts.items()
+            if 0 < count < policy.minimum_sources_per_session
+        }
         findings: list[QualityFinding] = []
-        source_ids = tuple(source.evidence.evidence_id for source in sources)
-        for code, missing in insufficient.items():
-            for start, end, count in self._missing_intervals(expected, missing):
-                observed_counts = [
-                    counts[session]
-                    for session in expected
-                    if start <= session <= end and session in missing
-                ]
-                findings.append(
-                    self._finding(
-                        check_id="requested_range_coverage",
-                        severity=FindingSeverity.ERROR,
-                        code=code,
-                        start=start,
-                        end=end,
-                        source_ids=source_ids,
-                        values={
-                            "missing_count": count,
-                            "minimum_sources": policy.minimum_sources_per_session,
-                            "observed_min_sources": min(observed_counts),
-                        },
-                        message="requested range lacks the required source coverage",
-                    )
-                )
-
+        evidence_ids = tuple(source.evidence.evidence_id for source in sources)
+        findings.extend(
+            self._coverage_findings(
+                expected,
+                missing_all,
+                code="insufficient_session_coverage",
+                source_ids=evidence_ids,
+                minimum_sources=policy.minimum_sources_per_session,
+                counts=counts,
+            )
+        )
+        findings.extend(
+            self._coverage_findings(
+                expected,
+                insufficient_verify,
+                code="insufficient_source_verification",
+                source_ids=evidence_ids,
+                minimum_sources=policy.minimum_sources_per_session,
+                counts=counts,
+            )
+        )
         status = CheckStatus.INCOMPLETE if findings else CheckStatus.PASS
         return self._result(
             "requested_range_coverage",
             findings,
             {
-                "requested_expected_sessions": len(expected),
                 "minimum_sources_per_session": policy.minimum_sources_per_session,
+                "requested_expected_sessions": len(expected),
             },
             status=status,
         )
+
+    def _coverage_findings(
+        self,
+        expected: Sequence[date],
+        affected: set[date],
+        *,
+        code: str,
+        source_ids: tuple[str, ...],
+        minimum_sources: int,
+        counts: dict[date, int],
+    ) -> tuple[QualityFinding, ...]:
+        result: list[QualityFinding] = []
+        for start, end, count in self._missing_intervals(expected, affected):
+            observed = [
+                counts[session]
+                for session in expected
+                if start <= session <= end and session in affected
+            ]
+            result.append(
+                self._finding(
+                    "requested_range_coverage",
+                    FindingSeverity.ERROR,
+                    code,
+                    start,
+                    end,
+                    "requested range lacks the required source coverage",
+                    source_ids=source_ids,
+                    values={
+                        "minimum_sources": minimum_sources,
+                        "missing_count": count,
+                        "observed_min_sources": min(observed),
+                    },
+                )
+            )
+        return tuple(result)
 
     def _cross_source_overlap(
         self,
         sources: Sequence[QualitySourceData],
     ) -> CheckResult:
-        findings: list[QualityFinding] = []
-        pair_count = 0
-        missing_count = 0
-        for left, right in combinations(sources, 2):
-            pair_count += 1
-            left_sessions = {bar.session for bar in left.bars}
-            right_sessions = {bar.session for bar in right.bars}
-            only_left = left_sessions - right_sessions
-            only_right = right_sessions - left_sessions
-            missing_count += len(only_left) + len(only_right)
-            for start, end, count in self._calendar_intervals(only_left):
-                findings.append(
-                    self._finding(
-                        check_id="cross_source_overlap",
-                        severity=FindingSeverity.WARNING,
-                        code="cross_source_session_missing",
-                        start=start,
-                        end=end,
-                        source_ids=(
-                            left.evidence.evidence_id,
-                            right.evidence.evidence_id,
-                        ),
-                        values={
-                            "missing_from": right.evidence.evidence_id,
-                            "session_count": count,
-                        },
-                        message="session exists in one source but not the other",
-                    )
-                )
-            for start, end, count in self._calendar_intervals(only_right):
-                findings.append(
-                    self._finding(
-                        check_id="cross_source_overlap",
-                        severity=FindingSeverity.WARNING,
-                        code="cross_source_session_missing",
-                        start=start,
-                        end=end,
-                        source_ids=(
-                            left.evidence.evidence_id,
-                            right.evidence.evidence_id,
-                        ),
-                        values={
-                            "missing_from": left.evidence.evidence_id,
-                            "session_count": count,
-                        },
-                        message="session exists in one source but not the other",
-                    )
-                )
         if len(sources) < 2:
             return self._result(
                 "cross_source_overlap",
                 (),
-                {"pair_count": 0, "missing_session_count": 0},
+                {"missing_session_count": 0, "pair_count": 0},
                 status=CheckStatus.NOT_APPLICABLE,
             )
+        findings: list[QualityFinding] = []
+        missing_count = 0
+        pair_count = 0
+        for left, right in combinations(sources, 2):
+            pair_count += 1
+            left_sessions = {bar.session for bar in left.bars}
+            right_sessions = {bar.session for bar in right.bars}
+            for missing_from, sessions in (
+                (right.evidence.evidence_id, left_sessions - right_sessions),
+                (left.evidence.evidence_id, right_sessions - left_sessions),
+            ):
+                missing_count += len(sessions)
+                for session in sorted(sessions):
+                    findings.append(
+                        self._finding(
+                            "cross_source_overlap",
+                            FindingSeverity.WARNING,
+                            "cross_source_session_missing",
+                            session,
+                            session,
+                            "session exists in one source but not the other",
+                            source_ids=(
+                                left.evidence.evidence_id,
+                                right.evidence.evidence_id,
+                            ),
+                            values={"missing_from": missing_from},
+                        )
+                    )
         return self._result(
             "cross_source_overlap",
             findings,
-            {"pair_count": pair_count, "missing_session_count": missing_count},
+            {"missing_session_count": missing_count, "pair_count": pair_count},
         )
 
     def _cross_source_ohlc(
@@ -517,128 +511,105 @@ class QualitySuite:
             return self._result(
                 "cross_source_ohlc",
                 (),
-                {"pair_count": 0, "compared_values": 0},
+                {"compared_values": 0, "pair_count": 0},
                 status=CheckStatus.NOT_APPLICABLE,
             )
-
         findings: list[QualityFinding] = []
-        compared_values = 0
-        warning_count = 0
-        fail_count = 0
-        max_difference = Decimal("0")
+        compared = 0
+        pair_count = 0
+        maximum = Decimal("0")
         for left, right in combinations(sources, 2):
+            pair_count += 1
             left_map = self._stable_bar_map(left.bars)
             right_map = self._stable_bar_map(right.bars)
             for session in sorted(left_map.keys() & right_map.keys()):
-                left_bar = left_map[session]
-                right_bar = right_map[session]
                 for field in _PRICE_FIELDS:
-                    left_value = self._decimal(getattr(left_bar, field))
-                    right_value = self._decimal(getattr(right_bar, field))
+                    left_value = self._decimal(getattr(left_map[session], field))
+                    right_value = self._decimal(getattr(right_map[session], field))
                     if left_value is None or right_value is None:
                         continue
-                    denominator = (abs(left_value) + abs(right_value)) / Decimal("2")
-                    if denominator == 0:
+                    difference = self._symmetric_difference_bps(left_value, right_value)
+                    if difference is None:
                         continue
-                    difference_bps = (
-                        abs(left_value - right_value)
-                        / denominator
-                        * Decimal("10000")
-                    )
-                    compared_values += 1
-                    max_difference = max(max_difference, difference_bps)
-                    if difference_bps > policy.price_warning_tolerance_bps:
-                        fail_count += 1
-                        severity = FindingSeverity.ERROR
-                        code = "cross_source_field_conflict"
-                    elif difference_bps > policy.price_pass_tolerance_bps:
-                        warning_count += 1
+                    compared += 1
+                    maximum = max(maximum, difference)
+                    if difference <= policy.price_pass_tolerance_bps:
+                        continue
+                    if difference <= policy.price_warning_tolerance_bps:
                         severity = FindingSeverity.WARNING
                         code = "cross_source_field_warning"
                     else:
-                        continue
+                        severity = FindingSeverity.ERROR
+                        code = "cross_source_field_conflict"
                     findings.append(
                         self._finding(
-                            check_id="cross_source_ohlc",
-                            severity=severity,
-                            code=code,
-                            start=session,
-                            end=session,
+                            "cross_source_ohlc",
+                            severity,
+                            code,
+                            session,
+                            session,
+                            "cross-source field difference exceeds policy tolerance",
                             field=field,
                             source_ids=(
                                 left.evidence.evidence_id,
                                 right.evidence.evidence_id,
                             ),
                             values={
+                                "difference_bps": format(difference, "f"),
                                 "left": format(left_value, "f"),
                                 "right": format(right_value, "f"),
-                                "difference_bps": format(difference_bps, "f"),
                             },
-                            message="cross-source field difference exceeds policy tolerance",
                         )
                     )
         return self._result(
             "cross_source_ohlc",
             findings,
             {
-                "pair_count": len(tuple(combinations(sources, 2))),
-                "compared_values": compared_values,
-                "warning_count": warning_count,
-                "fail_count": fail_count,
-                "max_difference_bps": format(max_difference, "f"),
+                "compared_values": compared,
+                "max_difference_bps": format(maximum, "f"),
+                "pair_count": pair_count,
             },
         )
 
-    def _provider_revision(
-        self,
-        revisions: Sequence[RevisionPair],
-    ) -> CheckResult:
+    def _provider_revision(self, revisions: Sequence[RevisionPair]) -> CheckResult:
         if not revisions:
             return self._result(
                 "provider_revision",
                 (),
-                {"revision_pairs": 0, "changed_sessions": 0},
+                {"changed_sessions": 0, "revision_pairs": 0},
                 status=CheckStatus.NOT_APPLICABLE,
             )
         findings: list[QualityFinding] = []
-        changed_sessions = 0
         for pair in revisions:
             previous = self._stable_bar_map(pair.previous.bars)
             current = self._stable_bar_map(pair.current.bars)
             for session in sorted(previous.keys() | current.keys()):
-                changed_fields = self._changed_fields(
-                    previous.get(session),
-                    current.get(session),
-                )
-                if not changed_fields:
+                changed = self._changed_fields(previous.get(session), current.get(session))
+                if not changed:
                     continue
-                changed_sessions += 1
                 findings.append(
                     self._finding(
-                        check_id="provider_revision",
-                        severity=FindingSeverity.WARNING,
-                        code="provider_history_revision",
-                        start=session,
-                        end=session,
+                        "provider_revision",
+                        FindingSeverity.WARNING,
+                        "provider_history_revision",
+                        session,
+                        session,
+                        "provider history differs between two captures",
                         source_ids=(
                             pair.previous.evidence.evidence_id,
                             pair.current.evidence.evidence_id,
                         ),
                         values={
-                            "changed_fields": changed_fields,
-                            "previous_capture": pair.previous.evidence.capture_hash,
+                            "changed_fields": changed,
                             "current_capture": pair.current.evidence.capture_hash,
+                            "previous_capture": pair.previous.evidence.capture_hash,
                         },
-                        message="provider history differs between two captures",
                     )
                 )
         return self._result(
             "provider_revision",
             findings,
-            {
-                "revision_pairs": len(revisions),
-                "changed_sessions": changed_sessions,
-            },
+            {"changed_sessions": len(findings), "revision_pairs": len(revisions)},
         )
 
     def _adjustment_semantics(self, adjustment_mode: AdjustmentMode) -> CheckResult:
@@ -670,16 +641,13 @@ class QualitySuite:
             finding_id = finding.finding_id
             if finding.finding_code in _INELIGIBLE_CODES:
                 blocking.append(finding_id)
-            elif finding.finding_code in _INCOMPLETE_CODES:
-                incomplete.append(finding_id)
-            elif (
+            elif finding.finding_code in _INCOMPLETE_CODES or (
                 finding.finding_code == "provider_history_revision"
                 and policy.revision_blocks_requested_range
             ):
                 incomplete.append(finding_id)
             elif finding.severity is not FindingSeverity.INFO:
                 warnings.append(finding_id)
-
         blocking_ids = tuple(sorted(set(blocking)))
         incomplete_ids = tuple(sorted(set(incomplete)))
         warning_ids = tuple(sorted(set(warnings)))
@@ -719,31 +687,32 @@ class QualitySuite:
                 ),
             )
         )
-        if status is None:
+        resolved_status = status
+        if resolved_status is None:
             severities = {finding.severity for finding in ordered}
             if FindingSeverity.BLOCKER in severities or FindingSeverity.ERROR in severities:
-                status = CheckStatus.FAIL
+                resolved_status = CheckStatus.FAIL
             elif FindingSeverity.WARNING in severities:
-                status = CheckStatus.WARNING
+                resolved_status = CheckStatus.WARNING
             else:
-                status = CheckStatus.PASS
+                resolved_status = CheckStatus.PASS
         return CheckResult(
             check_id=check_id,
             check_version=_CHECK_VERSION,
-            status=status,
+            status=resolved_status,
             findings=ordered,
             metrics=metrics,
         )
 
     @staticmethod
     def _finding(
-        *,
         check_id: str,
         severity: FindingSeverity,
         code: str,
         start: date,
         end: date,
         message: str,
+        *,
         source_ids: tuple[str, ...] = (),
         values: dict[str, Any] | None = None,
         field: str | None = None,
@@ -767,9 +736,14 @@ class QualitySuite:
             parsed = Decimal(str(value))
         except (InvalidOperation, ValueError):
             return None
-        if not parsed.is_finite():
+        return parsed if parsed.is_finite() else None
+
+    @staticmethod
+    def _symmetric_difference_bps(left: Decimal, right: Decimal) -> Decimal | None:
+        denominator = (abs(left) + abs(right)) / Decimal("2")
+        if denominator == 0:
             return None
-        return parsed
+        return abs(left - right) / denominator * Decimal("10000")
 
     @staticmethod
     def _stable_bar_map(bars: Sequence[NormalizedBar]) -> dict[date, NormalizedBar]:
@@ -797,10 +771,9 @@ class QualitySuite:
     ) -> list[str]:
         if previous is None or current is None:
             return ["session_presence"]
-        fields = [*_PRICE_FIELDS, "volume"]
         return [
             field
-            for field in fields
+            for field in (*_PRICE_FIELDS, "volume")
             if str(getattr(previous, field)) != str(getattr(current, field))
         ]
 
@@ -838,12 +811,3 @@ class QualitySuite:
         if start is not None and end is not None:
             intervals.append((start, end, count))
         return tuple(intervals)
-
-    @staticmethod
-    def _calendar_intervals(
-        sessions: set[date],
-    ) -> tuple[tuple[date, date, int], ...]:
-        if not sessions:
-            return ()
-        ordered = sorted(sessions)
-        return tuple((session, session, 1) for session in ordered)
