@@ -17,7 +17,7 @@ QuantVerify 是一个以实验为中心、强调可复现性和防止研究偏�
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev,research]'
+python -m pip install -e '.[dev,research,market-data]'
 pytest
 ```
 
