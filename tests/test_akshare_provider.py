@@ -78,6 +78,13 @@ class AkShareUSDailyProviderTests(TestCase):
         self.assertEqual(bars[0].source, "akshare:stock_us_daily:qfq")
         self.assertEqual(AkShareAdjustment.QFQ.adjustment_mode, AdjustmentMode.SPLIT_ADJUSTED)
 
+    def test_accepts_snapshot_serialized_midnight_timestamp(self) -> None:
+        provider, _ = self.make_provider([row("2026-01-02T00:00:00")])
+
+        bars = provider.load_daily(ASSET)
+
+        self.assertEqual(bars[0].session, date(2026, 1, 2))
+
     def test_filters_requested_dates_after_validating_the_response(self) -> None:
         provider, _ = self.make_provider(
             [row("2026-01-02"), row("2026-01-05"), row("2026-01-06")]
@@ -105,4 +112,12 @@ class AkShareUSDailyProviderTests(TestCase):
         provider, _ = self.make_provider([row("2026-01-02", close="NaN")])
 
         with self.assertRaisesRegex(DataQualityError, "non-finite close"):
+            provider.load_daily(ASSET)
+
+    def test_rejects_prices_that_violate_the_normalized_bar_contract(self) -> None:
+        invalid = row("2026-01-02")
+        invalid["low"] = "-0.9583"
+        provider, _ = self.make_provider([invalid])
+
+        with self.assertRaisesRegex(DataQualityError, "row 0 violates the normalized-bar contract"):
             provider.load_daily(ASSET)

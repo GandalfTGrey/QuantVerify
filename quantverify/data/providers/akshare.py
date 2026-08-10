@@ -14,6 +14,8 @@ from enum import StrEnum
 from importlib import import_module
 from typing import Any, Protocol, cast
 
+from pydantic import ValidationError
+
 from quantverify.core.enums import AdjustmentMode, AssetClass
 from quantverify.core.exceptions import DataQualityError, QuantVerifyError
 from quantverify.core.models import AssetId
@@ -179,8 +181,8 @@ class AkShareUSDailyProvider:
         bars: list[NormalizedBar] = []
         for index, session, record in selected_records:
             session_open_at, session_close_at = session_times[session]
-            bars.append(
-                NormalizedBar(
+            try:
+                bar = NormalizedBar(
                     asset=asset,
                     session=session,
                     session_open_at=session_open_at,
@@ -193,7 +195,11 @@ class AkShareUSDailyProvider:
                     volume=self._parse_decimal(record["volume"], "volume", index),
                     source=f"{self.source_name}:{adjustment.name.lower()}",
                 )
-            )
+            except ValidationError as error:
+                raise DataQualityError(
+                    f"AkShare row {index} violates the normalized-bar contract: {error}"
+                ) from error
+            bars.append(bar)
 
         return tuple(sorted(bars, key=lambda bar: bar.session))
 
@@ -255,7 +261,12 @@ class AkShareUSDailyProvider:
         try:
             return date.fromisoformat(str(value))
         except ValueError as error:
-            raise DataQualityError(f"AkShare row {index} has invalid date: {value!r}") from error
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+            except ValueError:
+                raise DataQualityError(
+                    f"AkShare row {index} has invalid date: {value!r}"
+                ) from error
 
     @staticmethod
     def _parse_decimal(value: Any, field: str, index: int) -> Decimal:
