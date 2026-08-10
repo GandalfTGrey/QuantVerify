@@ -147,7 +147,11 @@ class QualitySuiteV2Tests(TestCase):
 
         self.assertEqual(cross.status, CheckStatus.FAIL)
         self.assertTrue(
-            any(f.finding_code == "cross_source_field_conflict" and f.affected_start == old for f in cross.findings)
+            any(
+                finding.finding_code == "cross_source_field_conflict"
+                and finding.affected_start == old
+                for finding in cross.findings
+            )
         )
         self.assertEqual(report.eligibility.status, EligibilityStatus.ELIGIBLE)
 
@@ -213,7 +217,11 @@ class QualitySuiteV2Tests(TestCase):
 
         self.assertEqual(report.eligibility.status, EligibilityStatus.ELIGIBLE)
         self.assertTrue(
-            any(f.finding_code == "source_missing_session" and f.affected_start == early for f in report.findings)
+            any(
+                finding.finding_code == "source_missing_session"
+                and finding.affected_start == early
+                for finding in report.findings
+            )
         )
 
     def test_dia_like_isolated_missing_session_inside_range_is_incomplete(self) -> None:
@@ -271,7 +279,13 @@ class QualitySuiteV2Tests(TestCase):
             request_char="c",
         )
         revision = RevisionPair(previous=previous, current=current)
-        default = self.evaluate([current], [session], start=session, end=session, revisions=(revision,))
+        default = self.evaluate(
+            [current],
+            [session],
+            start=session,
+            end=session,
+            revisions=(revision,),
+        )
         strict = self.evaluate(
             [current],
             [session],
@@ -283,7 +297,12 @@ class QualitySuiteV2Tests(TestCase):
 
         self.assertEqual(default.eligibility.status, EligibilityStatus.ELIGIBLE)
         self.assertEqual(strict.eligibility.status, EligibilityStatus.INCOMPLETE)
-        self.assertTrue(any(f.finding_code == "provider_history_revision" for f in default.findings))
+        self.assertTrue(
+            any(
+                finding.finding_code == "provider_history_revision"
+                for finding in default.findings
+            )
+        )
 
     def test_source_order_does_not_change_report_identity(self) -> None:
         session = date(2026, 1, 2)
