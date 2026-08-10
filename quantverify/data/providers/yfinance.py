@@ -1,14 +1,15 @@
 """Yahoo Finance daily-bar adapter for research-only cross validation.
 
-The provider requests Yahoo's raw OHLCV response explicitly.  It deliberately
-does not promote ``Adj Close`` to an OHLC field: adjusted returns and corporate
-actions must be audited separately before they can inform a research dataset.
+The provider captures the provider-facing response once, then normalizes that
+exact immutable capture offline. It deliberately does not promote ``Adj Close``
+to an OHLC field: adjusted returns and corporate actions must be audited
+separately before they can inform a research dataset.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from importlib import import_module
 from typing import Any, Protocol, cast
@@ -18,6 +19,7 @@ from pydantic import ValidationError
 from quantverify.core.enums import AssetClass
 from quantverify.core.exceptions import DataQualityError, QuantVerifyError
 from quantverify.core.models import AssetId
+from quantverify.data.capture import RawCapture
 from quantverify.data.models import NormalizedBar
 from quantverify.data.providers.akshare import SessionResolver, USMarketSessionResolver
 
@@ -51,6 +53,7 @@ class YFinanceUSDailyProvider:
     """
 
     source_name = "yfinance:download"
+    capture_schema_version = "yfinance-download-raw-v1"
     _required_columns = frozenset({"date", "open", "high", "low", "close", "volume"})
 
     def __init__(
@@ -68,13 +71,60 @@ class YFinanceUSDailyProvider:
         start: date,
         end: date,
     ) -> tuple[NormalizedBar, ...]:
-        """Fetch inclusive raw daily bars and normalize them fail-closed."""
+        """Capture once and normalize the exact response offline."""
+
+        capture = self.capture_daily(asset, start=start, end=end)
+        return self.normalize_daily(asset, capture, start=start, end=end)
+
+    def capture_daily(
+        self,
+        asset: AssetId,
+        *,
+        start: date,
+        end: date,
+    ) -> RawCapture:
+        """Perform exactly one provider request and preserve its provider-facing rows."""
 
         self._validate_request(asset, start, end)
-        records = self.fetch_daily_records(asset, start=start, end=end)
+        request = {
+            "tickers": asset.symbol,
+            "start": start.isoformat(),
+            "end": (end + timedelta(days=1)).isoformat(),
+            "interval": "1d",
+            "auto_adjust": False,
+            "actions": False,
+            "progress": False,
+            "threads": False,
+            "group_by": "column",
+            "multi_level_index": False,
+        }
+        response = self._get_client().download(**request)
+        records = self._raw_records_from(response)
+        return RawCapture.from_records(
+            provider="yfinance",
+            endpoint="download",
+            request=request,
+            records=records,
+            captured_at=datetime.now(UTC),
+            schema_version=self.capture_schema_version,
+        )
+
+    def normalize_daily(
+        self,
+        asset: AssetId,
+        capture: RawCapture,
+        *,
+        start: date,
+        end: date,
+    ) -> tuple[NormalizedBar, ...]:
+        """Normalize a previously captured response without provider access."""
+
+        self._validate_request(asset, start, end)
+        self._validate_capture(asset, capture)
         seen_sessions: set[date] = set()
         selected_records: list[tuple[int, date, Mapping[str, Any]]] = []
-        for index, record in enumerate(records):
+        for index, raw_record in enumerate(capture.records):
+            record = self._canonicalize_record(raw_record)
             missing = self._required_columns.difference(record)
             if missing:
                 columns = ", ".join(sorted(missing))
@@ -127,27 +177,14 @@ class YFinanceUSDailyProvider:
         start: date,
         end: date,
     ) -> tuple[Mapping[str, Any], ...]:
-        """Fetch canonical raw records for immutable snapshotting.
+        """Compatibility API returning canonical records from one raw capture.
 
-        yfinance interprets ``end`` as exclusive, whereas QuantVerify range
-        contracts are inclusive.  Adding one calendar day preserves the caller
-        contract; non-session dates are still rejected during normalization.
+        New ingestion workflows should use :meth:`capture_daily` directly so the
+        exact provider-facing response and request provenance can be persisted.
         """
 
-        self._validate_request(asset, start, end)
-        response = self._get_client().download(
-            asset.symbol,
-            start=start.isoformat(),
-            end=(end + timedelta(days=1)).isoformat(),
-            interval="1d",
-            auto_adjust=False,
-            actions=False,
-            progress=False,
-            threads=False,
-            group_by="column",
-            multi_level_index=False,
-        )
-        return self._records_from(response)
+        capture = self.capture_daily(asset, start=start, end=end)
+        return tuple(self._canonicalize_record(record) for record in capture.records)
 
     def _resolve_sessions(
         self, sessions: tuple[date, ...]
@@ -175,8 +212,15 @@ class YFinanceUSDailyProvider:
         if start > end:
             raise DataQualityError("start must not be later than end")
 
+    @staticmethod
+    def _validate_capture(asset: AssetId, capture: RawCapture) -> None:
+        if capture.provider != "yfinance" or capture.endpoint != "download":
+            raise DataQualityError("capture does not belong to the yfinance download adapter")
+        if capture.request.get("tickers") != asset.symbol:
+            raise DataQualityError("capture ticker does not match requested asset")
+
     @classmethod
-    def _records_from(cls, response: Any) -> tuple[Mapping[str, Any], ...]:
+    def _raw_records_from(cls, response: Any) -> tuple[Mapping[str, Any], ...]:
         if not hasattr(response, "reset_index") or not hasattr(response, "empty"):
             raise DataQualityError("yfinance response must be a dataframe-like object")
         if response.empty:
@@ -187,7 +231,7 @@ class YFinanceUSDailyProvider:
         rows = flattened.to_dict(orient="records")
         if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
             raise DataQualityError("yfinance response could not be converted to row records")
-        return tuple(cls._canonicalize_record(row) for row in rows)
+        return tuple(dict(row) for row in rows)
 
     @staticmethod
     def _canonicalize_record(record: Mapping[str, Any]) -> Mapping[str, Any]:
