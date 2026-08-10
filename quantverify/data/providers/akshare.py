@@ -1,8 +1,9 @@
 """AkShare US daily-bar adapter with explicit calendar and adjustment semantics.
 
-The adapter deliberately returns provider-labelled bars instead of treating an
-AkShare response as verified research data.  Callers must persist the raw
-response and run the cross-source validator before creating a research dataset.
+The adapter captures one provider response and normalizes that exact capture
+offline. It deliberately returns provider-labelled bars instead of treating an
+AkShare response as verified research data. Callers must persist the capture and
+run cross-source validation before creating a research dataset.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pydantic import ValidationError
 from quantverify.core.enums import AdjustmentMode, AssetClass
 from quantverify.core.exceptions import DataQualityError, QuantVerifyError
 from quantverify.core.models import AssetId
+from quantverify.data.capture import RawCapture
 from quantverify.data.models import NormalizedBar
 
 
@@ -56,9 +58,9 @@ class SessionResolver(Protocol):
 class USMarketSessionResolver:
     """US equity session resolver backed by ``pandas_market_calendars``.
 
-    ``NYSE`` is used as the default US equity schedule.  QQQ (XNAS) and DIA
-    (ARCX) share its regular days and early-close schedule for M1 purposes.
-    A source row on a non-session date is rejected rather than assigned a
+    ``NYSE`` is used as the default US equity schedule. QQQ (XNAS) and DIA
+    (ARCX) share its regular days and early-close schedule for M1 purposes. A
+    source row on a non-session date is rejected rather than assigned a
     fabricated timestamp.
     """
 
@@ -118,15 +120,15 @@ class USMarketSessionResolver:
 
 
 class AkShareUSDailyProvider:
-    """Load, validate, and normalize AkShare ``stock_us_daily`` responses.
+    """Capture, validate, and normalize AkShare ``stock_us_daily`` responses.
 
-    This is an ingestion adapter, not a validation bypass.  Its output source
+    This is an ingestion adapter, not a validation bypass. Its output source
     remains explicitly labelled ``akshare`` and is meant to enter the secondary
-    side of the M1 dual-source comparison until an approved primary dataset is
-    selected.
+    side of the M1 comparison until an approved research dataset is released.
     """
 
     source_name = "akshare:stock_us_daily"
+    capture_schema_version = "akshare-stock-us-daily-raw-v1"
     _required_columns = frozenset({"date", "open", "high", "low", "close", "volume"})
 
     def __init__(
@@ -145,21 +147,48 @@ class AkShareUSDailyProvider:
         end: date | None = None,
         adjustment: AkShareAdjustment = AkShareAdjustment.RAW,
     ) -> tuple[NormalizedBar, ...]:
-        """Fetch inclusive daily bars and fail closed on an invalid response.
+        """Capture once and normalize the exact response offline."""
 
-        AkShare's endpoint has no date-range parameters, so range filtering is
-        deliberately local and occurs only after the complete response has been
-        structurally validated.  ``available_at`` represents the exchange close,
-        while the engine's mandatory next-session execution preserves the causal
-        boundary for close-derived signals.
-        """
+        capture = self.capture_daily(asset, adjustment=adjustment)
+        return self.normalize_daily(asset, capture, start=start, end=end)
+
+    def capture_daily(
+        self,
+        asset: AssetId,
+        *,
+        adjustment: AkShareAdjustment = AkShareAdjustment.RAW,
+    ) -> RawCapture:
+        """Perform exactly one AkShare call and preserve the returned rows."""
+
+        self._validate_request(asset, None, None)
+        request = {"symbol": asset.symbol, "adjust": adjustment.value}
+        response = self._get_client().stock_us_daily(**request)
+        records = self._records_from(response)
+        return RawCapture.from_records(
+            provider="akshare",
+            endpoint="stock_us_daily",
+            request=request,
+            records=records,
+            captured_at=datetime.now(UTC),
+            schema_version=self.capture_schema_version,
+        )
+
+    def normalize_daily(
+        self,
+        asset: AssetId,
+        capture: RawCapture,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> tuple[NormalizedBar, ...]:
+        """Normalize a previously captured AkShare response without network access."""
 
         self._validate_request(asset, start, end)
-        records = self.fetch_daily_records(asset, adjustment=adjustment)
+        adjustment = self._validate_capture(asset, capture)
         selected_records: list[tuple[int, date, Mapping[str, Any]]] = []
         seen_sessions: set[date] = set()
 
-        for index, record in enumerate(records):
+        for index, record in enumerate(capture.records):
             missing = self._required_columns.difference(record)
             if missing:
                 columns = ", ".join(sorted(missing))
@@ -216,11 +245,9 @@ class AkShareUSDailyProvider:
         *,
         adjustment: AkShareAdjustment = AkShareAdjustment.RAW,
     ) -> tuple[Mapping[str, Any], ...]:
-        """Fetch the complete adapter-level raw response for immutable snapshotting."""
+        """Compatibility API returning records from exactly one raw capture."""
 
-        self._validate_request(asset, None, None)
-        response = self._get_client().stock_us_daily(asset.symbol, adjust=adjustment.value)
-        return self._records_from(response)
+        return self.capture_daily(asset, adjustment=adjustment).records
 
     def _get_client(self) -> AkShareClient:
         if self._client is None:
@@ -241,6 +268,18 @@ class AkShareUSDailyProvider:
             raise DataQualityError("start must not be later than end")
 
     @staticmethod
+    def _validate_capture(asset: AssetId, capture: RawCapture) -> AkShareAdjustment:
+        if capture.provider != "akshare" or capture.endpoint != "stock_us_daily":
+            raise DataQualityError("capture does not belong to the AkShare stock_us_daily adapter")
+        if capture.request.get("symbol") != asset.symbol:
+            raise DataQualityError("capture symbol does not match requested asset")
+        adjust = capture.request.get("adjust")
+        try:
+            return AkShareAdjustment(str(adjust))
+        except ValueError as error:
+            raise DataQualityError(f"capture has unsupported AkShare adjustment: {adjust!r}") from error
+
+    @staticmethod
     def _records_from(response: Any) -> tuple[Mapping[str, Any], ...]:
         if not hasattr(response, "to_dict"):
             raise DataQualityError("AkShare response must be a dataframe-like object with to_dict")
@@ -250,7 +289,7 @@ class AkShareUSDailyProvider:
         )
         if not records_are_mappings:
             raise DataQualityError("AkShare response could not be converted to row records")
-        return tuple(records)
+        return tuple(dict(record) for record in records)
 
     @staticmethod
     def _parse_session(value: Any, index: int) -> date:
