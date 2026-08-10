@@ -1,0 +1,33 @@
+schema_version: 1
+strategy_id: TREND_WEEKLY_DUAL_MA_V1
+name: Weekly Dual Moving-Average Trend
+family: trend
+status: candidate
+assets: [US_ETF_QQQ, US_ETF_DIA]
+frequency: 1w
+required_history_bars: 60
+resampling:
+  source_frequency: 1d
+  method: exchange_calendar_last_session
+indicators:
+  fast:
+    type: sma
+    field: close
+    window: 13
+  slow:
+    type: sma
+    field: close
+    window: 40
+signal:
+  risk_on: fast > slow
+  risk_off: fast <= slow
+position:
+  risk_on_weight: 1.0
+  defensive_weight: 0.0
+execution:
+  decision: period_close
+  price: next_open
+  lag_bars: 1
+research_grid:
+  fast_window: [10, 13, 20]
+  slow_window: [30, 40, 52]

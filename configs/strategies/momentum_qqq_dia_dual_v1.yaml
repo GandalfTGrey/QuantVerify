@@ -1,0 +1,27 @@
+schema_version: 1
+strategy_id: MOMENTUM_QQQ_DIA_DUAL_V1
+name: Monthly QQQ DIA Dual Momentum
+family: momentum
+status: candidate
+assets: [US_ETF_QQQ, US_ETF_DIA]
+frequency: 1mo
+required_history_bars: 18
+resampling:
+  source_frequency: 1d
+  method: exchange_calendar_last_session
+signal:
+  relative: select highest trailing_total_return
+  absolute: selected_return > cash_hurdle
+position:
+  selected_asset_weight: 1.0
+  defensive_weight: 0.0
+execution:
+  decision: period_close
+  price: next_open
+  lag_bars: 1
+parameters:
+  lookback_months: 12
+  skip_recent_months: 0
+  cash_hurdle: configured_cash_return
+research_grid:
+  lookback_months: [6, 9, 12]

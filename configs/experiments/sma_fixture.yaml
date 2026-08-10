@@ -1,0 +1,40 @@
+schema_version: 1
+strategy:
+  strategy_id: ma_cross
+  version: 1.0.0
+  code_hash: abc1234
+universe_id: spy
+dataset:
+  dataset_id: spy-daily-fixture
+  content_hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  schema_version: "1"
+  source: fixture
+  captured_at: "2026-08-09T00:00:00+00:00"
+  adjustment_mode: total_return
+period:
+  start: "2020-01-01T00:00:00+00:00"
+  end: "2025-01-01T00:00:00+00:00"
+frequency: 1d
+parameters:
+  short_window: 10
+  long_window: 50
+benchmark_id: "SPY:buy_hold"
+cost_model:
+  commission_bps: 2.5
+  slippage_bps: 3.0
+execution:
+  decision_time: bar_close
+  execution_price: next_open
+  signal_lag_bars: 1
+  allow_fractional: true
+validation:
+  train_fraction: 0.6
+  validation_fraction: 0.2
+  test_fraction: 0.2
+  purge_bars: 0
+  embargo_bars: 0
+engine:
+  engine_id: reference
+  version: 0.1.0
+base_currency: USD
+random_seed: 42

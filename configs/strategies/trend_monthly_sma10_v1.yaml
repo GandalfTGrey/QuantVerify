@@ -1,0 +1,28 @@
+schema_version: 1
+strategy_id: TREND_MONTHLY_SMA10_V1
+name: Monthly 10-Month SMA Tactical Allocation
+family: trend
+status: candidate
+assets: [US_ETF_QQQ, US_ETF_DIA]
+frequency: 1mo
+required_history_bars: 18
+resampling:
+  source_frequency: 1d
+  method: exchange_calendar_last_session
+indicators:
+  trend:
+    type: sma
+    field: close
+    window: 10
+signal:
+  risk_on: close > trend
+  risk_off: close <= trend
+position:
+  risk_on_weight: 1.0
+  defensive_weight: 0.0
+execution:
+  decision: period_close
+  price: next_open
+  lag_bars: 1
+research_grid:
+  trend_window: [8, 9, 10, 11, 12]

@@ -1,0 +1,31 @@
+schema_version: 1
+strategy_id: MR_RSI2_TREND_V1
+name: Daily RSI2 Pullback with SMA200 Filter
+family: mean_reversion
+status: candidate
+assets: [US_ETF_QQQ, US_ETF_DIA]
+frequency: 1d
+required_history_bars: 260
+indicators:
+  rsi:
+    type: wilder_rsi
+    field: close
+    period: 2
+  trend:
+    type: sma
+    field: close
+    window: 200
+signal:
+  entry: rsi < 10 and close > trend
+  exit: rsi > 70
+position:
+  risk_on_weight: 1.0
+  defensive_weight: 0.0
+execution:
+  decision: bar_close
+  price: next_open
+  lag_bars: 1
+research_grid:
+  entry_threshold: [5, 10, 15, 20]
+  exit_threshold: [50, 60, 70, 80]
+  trend_window: [150, 200, 250]
