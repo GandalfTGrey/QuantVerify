@@ -6,6 +6,8 @@ from quantverify.data.quality import (
     CrossSourceRequirement,
     DataQualityReportV2,
     EligibilityStatus,
+    ExpectedSessionSetRef,
+    NormalizedInputRef,
     QualityPolicy,
     QualitySuite,
 )
@@ -21,7 +23,9 @@ __all__ = [
     "DataLicenseProfile",
     "DataQualityReportV2",
     "EligibilityStatus",
+    "ExpectedSessionSetRef",
     "NormalizedBar",
+    "NormalizedInputRef",
     "QualityPolicy",
     "QualitySuite",
     "RawCapture",
