@@ -96,7 +96,7 @@ class CaptureStoreSecretGuardTests(TestCase):
                 self.assertFalse((Path(directory) / "captures").exists())
                 self.assertFalse((Path(directory) / "manifests").exists())
 
-    def test_does_not_reject_non_credential_words_that_only_contain_similar_substrings(self) -> None:
+    def test_allows_non_credential_words_with_similar_substrings(self) -> None:
         safe_request: dict[str, object] = {
             "symbol": "QQQ",
             "api_version": "v2",
