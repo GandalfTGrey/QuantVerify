@@ -18,6 +18,7 @@ from quantverify.data.quality.models import (
     CheckStatus,
     DataQualityReportV2,
     EligibilityStatus,
+    ExpectedSessionSetRef,
     FindingSeverity,
     QualityEvaluationContext,
     QualityFinding,
@@ -27,7 +28,7 @@ from quantverify.data.quality.models import (
 )
 from quantverify.data.quality.policy import QualityPolicy
 
-_CHECK_VERSION = "1"
+_CHECK_VERSION = "2"
 _PRICE_FIELDS = ("open", "high", "low", "close")
 _INELIGIBLE_CODES = frozenset(
     {
@@ -45,6 +46,7 @@ _INCOMPLETE_CODES = frozenset(
     {
         "insufficient_session_coverage",
         "insufficient_source_verification",
+        "unsupported_normalized_schema",
     }
 )
 
@@ -73,16 +75,25 @@ class QualitySuite:
 
         active_policy = policy or QualityPolicy()
         ordered_sources = tuple(
-            sorted(sources, key=lambda source: source.evidence.evidence_id)
+            sorted(
+                sources,
+                key=lambda source: (
+                    source.evidence.evidence_id,
+                    source.normalized_input.input_id,
+                ),
+            )
         )
         self._validate_assets(asset, ordered_sources)
         expected = tuple(sorted(set(expected_sessions)))
+        expected_ref = ExpectedSessionSetRef.from_sessions(calendar_id, expected)
         ordered_revisions = tuple(
             sorted(
                 revisions,
                 key=lambda pair: (
                     pair.previous.evidence.evidence_id,
+                    pair.previous.normalized_input.input_id,
                     pair.current.evidence.evidence_id,
+                    pair.current.normalized_input.input_id,
                 ),
             )
         )
@@ -94,16 +105,26 @@ class QualitySuite:
             frequency=frequency,
             adjustment_mode=adjustment_mode,
             calendar_id=calendar_id,
+            expected_sessions=expected_ref,
             requested_start=requested_start,
             requested_end=requested_end,
             observed_start=observed_start,
             observed_end=observed_end,
             policy_version=active_policy.version,
+            policy_hash=active_policy.content_hash,
             evidence_refs=tuple(source.evidence for source in ordered_sources),
+            normalized_input_refs=tuple(
+                source.normalized_input for source in ordered_sources
+            ),
         )
 
         results = (
-            self._schema_contract(ordered_sources),
+            self._schema_contract(
+                ordered_sources,
+                active_policy,
+                requested_start,
+                requested_end,
+            ),
             self._session_integrity(ordered_sources),
             self._ohlc_integrity(ordered_sources),
             self._volume_integrity(ordered_sources),
@@ -146,16 +167,60 @@ class QualitySuite:
                     "quality evaluation requires every source to match the requested asset"
                 )
 
-    def _schema_contract(self, sources: Sequence[QualitySourceData]) -> CheckResult:
+    def _schema_contract(
+        self,
+        sources: Sequence[QualitySourceData],
+        policy: QualityPolicy,
+        requested_start: date,
+        requested_end: date,
+    ) -> CheckResult:
+        findings: list[QualityFinding] = []
+        accepted = set(policy.accepted_normalized_schema_versions)
+        for source in sources:
+            normalized = source.normalized_input
+            if normalized.schema_version in accepted:
+                continue
+            sessions = [bar.session for bar in source.bars]
+            affected_start = min(sessions) if sessions else requested_start
+            affected_end = max(sessions) if sessions else requested_end
+            findings.append(
+                self._finding(
+                    "schema_contract",
+                    FindingSeverity.ERROR,
+                    "unsupported_normalized_schema",
+                    affected_start,
+                    affected_end,
+                    "normalized input schema is not accepted by quality policy",
+                    source_ids=(source.evidence.evidence_id,),
+                    values={
+                        "normalizer_id": normalized.normalizer_id,
+                        "normalizer_version": normalized.normalizer_version,
+                        "schema_version": normalized.schema_version,
+                    },
+                )
+            )
+        status = CheckStatus.INCOMPLETE if findings else CheckStatus.PASS
         return self._result(
             "schema_contract",
-            (),
+            findings,
             {
+                "accepted_normalized_schema_versions": sorted(accepted),
                 "capture_schema_versions": [
                     source.evidence.capture_schema_version for source in sources
                 ],
+                "normalized_schema_versions": [
+                    source.normalized_input.schema_version for source in sources
+                ],
+                "normalizers": [
+                    {
+                        "id": source.normalized_input.normalizer_id,
+                        "version": source.normalized_input.normalizer_version,
+                    }
+                    for source in sources
+                ],
                 "source_count": len(sources),
             },
+            status=status,
         )
 
     def _session_integrity(self, sources: Sequence[QualitySourceData]) -> CheckResult:
