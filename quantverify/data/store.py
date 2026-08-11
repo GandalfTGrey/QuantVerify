@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -268,13 +270,38 @@ class CaptureStore:
 
     @staticmethod
     def _write_immutable(path: Path, content: bytes, label: str) -> None:
+        """Publish complete bytes atomically without replacing an existing object."""
+
         path.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".quantverify-",
+            dir=path.parent,
+        )
+        temporary_path = Path(temporary_name)
         try:
-            with path.open("xb") as handle:
+            with os.fdopen(file_descriptor, "wb") as handle:
                 handle.write(content)
-        except FileExistsError:
-            if path.read_bytes() != content:
-                raise ReproducibilityError(f"Immutable {label} collision at {path}") from None
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary_path, path)
+            except FileExistsError:
+                try:
+                    existing = path.read_bytes()
+                except OSError as error:
+                    raise ReproducibilityError(
+                        f"Immutable {label} collision cannot be verified at {path}"
+                    ) from error
+                if existing != content:
+                    raise ReproducibilityError(
+                        f"Immutable {label} collision at {path}"
+                    ) from None
+            except OSError as error:
+                raise ReproducibilityError(
+                    f"Atomic {label} publication failed at {path}"
+                ) from error
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     @staticmethod
     def _serialize(payload: Any) -> bytes:
