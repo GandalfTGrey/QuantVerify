@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
+from pydantic import ValidationError
+
 from quantverify.core.enums import AdjustmentMode, AssetClass, BarFrequency
 from quantverify.core.models import AssetId
 from quantverify.data.models import NormalizedBar
@@ -11,6 +14,8 @@ from quantverify.data.quality import (
     CrossSourceRequirement,
     DataQualityReportV2,
     EligibilityStatus,
+    ExpectedSessionSetRef,
+    NormalizedInputRef,
     QualityEvidenceRef,
     QualityPolicy,
     QualitySourceData,
@@ -63,6 +68,31 @@ def evidence(
     )
 
 
+def normalized_input(
+    bars: list[NormalizedBar],
+    *,
+    schema_version: str = "normalized-bar-v1",
+    normalizer_id: str = "fixture-normalizer",
+    normalizer_version: str = "1.0.0",
+) -> NormalizedInputRef:
+    try:
+        return NormalizedInputRef.from_bars(
+            bars,
+            schema_version=schema_version,
+            normalizer_id=normalizer_id,
+            normalizer_version=normalizer_version,
+        )
+    except (TypeError, ValueError):
+        # Only adversarial tests with deliberately non-canonical values use this path.
+        return NormalizedInputRef.model_construct(
+            content_hash="0" * 64,
+            schema_version=schema_version,
+            normalizer_id=normalizer_id,
+            normalizer_version=normalizer_version,
+            row_count=len(bars),
+        )
+
+
 def source(
     provider: str,
     capture_char: str,
@@ -70,6 +100,9 @@ def source(
     bars: list[NormalizedBar],
     *,
     request_char: str = "c",
+    schema_version: str = "normalized-bar-v1",
+    normalizer_id: str = "fixture-normalizer",
+    normalizer_version: str = "1.0.0",
 ) -> QualitySourceData:
     # Tests intentionally permit adversarial bars that bypass NormalizedBar's
     # boundary validation so QualitySuite defense-in-depth can be exercised.
@@ -79,6 +112,12 @@ def source(
             capture_char,
             manifest_char,
             request_char=request_char,
+        ),
+        normalized_input=normalized_input(
+            bars,
+            schema_version=schema_version,
+            normalizer_id=normalizer_id,
+            normalizer_version=normalizer_version,
         ),
         bars=tuple(bars),
     )
@@ -116,6 +155,140 @@ def test_clean_single_source_range_is_eligible_and_deterministic() -> None:
     assert first.eligibility.status is EligibilityStatus.ELIGIBLE
     assert first.report_id == second.report_id
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+
+def test_normalized_bar_change_changes_report_identity_even_when_checks_pass() -> None:
+    session = date(2026, 1, 2)
+    first_source = source(
+        "source_a",
+        "a",
+        "b",
+        [bar(session.isoformat(), close="100")],
+    )
+    second_source = source(
+        "source_a",
+        "a",
+        "b",
+        [bar(session.isoformat(), close="101")],
+    )
+
+    first = evaluate([first_source], [session], start=session, end=session)
+    second = evaluate([second_source], [session], start=session, end=session)
+
+    assert first.eligibility.status is EligibilityStatus.ELIGIBLE
+    assert second.eligibility.status is EligibilityStatus.ELIGIBLE
+    assert first.context.evidence_refs == second.context.evidence_refs
+    assert first.context.normalized_input_refs != second.context.normalized_input_refs
+    assert first.report_id != second.report_id
+
+
+def test_normalizer_version_changes_report_identity() -> None:
+    session = date(2026, 1, 2)
+    bars = [bar(session.isoformat())]
+    first = evaluate(
+        [source("source_a", "a", "b", bars, normalizer_version="1.0.0")],
+        [session],
+        start=session,
+        end=session,
+    )
+    second = evaluate(
+        [source("source_a", "a", "b", bars, normalizer_version="1.0.1")],
+        [session],
+        start=session,
+        end=session,
+    )
+
+    assert first.report_id != second.report_id
+
+
+def test_policy_content_change_changes_report_identity_with_same_label() -> None:
+    session = date(2026, 1, 2)
+    data = source("source_a", "a", "b", [bar(session.isoformat())])
+    first_policy = QualityPolicy(
+        price_pass_tolerance_bps=Decimal("10"),
+        price_warning_tolerance_bps=Decimal("50"),
+    )
+    second_policy = QualityPolicy(
+        price_pass_tolerance_bps=Decimal("20"),
+        price_warning_tolerance_bps=Decimal("60"),
+    )
+
+    first = evaluate(
+        [data],
+        [session],
+        start=session,
+        end=session,
+        policy=first_policy,
+    )
+    second = evaluate(
+        [data],
+        [session],
+        start=session,
+        end=session,
+        policy=second_policy,
+    )
+
+    assert first.policy_id == second.policy_id
+    assert first.policy_version == second.policy_version
+    assert first.eligibility.status is EligibilityStatus.ELIGIBLE
+    assert second.eligibility.status is EligibilityStatus.ELIGIBLE
+    assert first.context.policy_hash != second.context.policy_hash
+    assert first.report_id != second.report_id
+
+
+def test_exact_expected_session_set_has_content_identity() -> None:
+    first = ExpectedSessionSetRef.from_sessions(
+        "XNYS",
+        [date(2026, 1, 2), date(2026, 1, 5)],
+    )
+    second = ExpectedSessionSetRef.from_sessions(
+        "XNYS",
+        [date(2026, 1, 2), date(2026, 1, 6)],
+    )
+
+    assert first.session_count == second.session_count
+    assert first.content_hash != second.content_hash
+
+
+def test_unsupported_normalized_schema_is_incomplete_for_requested_range() -> None:
+    session = date(2026, 1, 2)
+    data = source(
+        "source_a",
+        "a",
+        "b",
+        [bar(session.isoformat())],
+        schema_version="unknown-normalized-v9",
+    )
+    report = evaluate([data], [session], start=session, end=session)
+    schema_check = next(
+        result for result in report.check_results if result.check_id == "schema_contract"
+    )
+
+    assert schema_check.status is CheckStatus.INCOMPLETE
+    assert report.eligibility.status is EligibilityStatus.INCOMPLETE
+    assert any(
+        finding.finding_code == "unsupported_normalized_schema"
+        for finding in schema_check.findings
+    )
+
+
+def test_normalized_input_ref_rejects_hash_mismatch() -> None:
+    session = date(2026, 1, 2)
+    bars = [bar(session.isoformat())]
+    wrong_ref = NormalizedInputRef(
+        content_hash="0" * 64,
+        schema_version="normalized-bar-v1",
+        normalizer_id="fixture-normalizer",
+        normalizer_version="1.0.0",
+        row_count=1,
+    )
+
+    with pytest.raises(ValidationError, match="content hash does not match"):
+        QualitySourceData(
+            evidence=evidence("source_a", "a", "b"),
+            normalized_input=wrong_ref,
+            bars=tuple(bars),
+        )
 
 
 def test_historical_conflict_outside_requested_range_remains_visible() -> None:
