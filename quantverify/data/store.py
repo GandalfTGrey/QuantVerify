@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,22 +17,53 @@ from quantverify.core.identity import canonicalize
 from quantverify.core.models import DomainModel
 from quantverify.data.capture import FrozenMapping, RawCapture
 
-_CREDENTIAL_KEYS = frozenset(
+_CREDENTIAL_TOKENS = frozenset(
     {
-        "access_token",
-        "api_key",
-        "apikey",
+        "auth",
+        "authentication",
         "authorization",
-        "client_secret",
+        "bearer",
         "cookie",
         "cookies",
-        "password",
         "passwd",
-        "private_key",
+        "password",
         "secret",
         "token",
     }
 )
+_CREDENTIAL_COMPACT_KEYS = frozenset(
+    {
+        "apikey",
+        "privatekey",
+    }
+)
+
+
+def _credential_key_tokens(key: str) -> tuple[str, ...]:
+    """Split request keys into lower-case semantic tokens without inspecting values."""
+
+    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key)
+    acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", camel_split)
+    return tuple(
+        token
+        for token in re.split(r"[^A-Za-z0-9]+", acronym_split.lower())
+        if token
+    )
+
+
+def _is_credential_key(key: str) -> bool:
+    tokens = _credential_key_tokens(key)
+    if not tokens:
+        return False
+    token_set = set(tokens)
+    if token_set & _CREDENTIAL_TOKENS:
+        return True
+    compact = "".join(tokens)
+    if compact in _CREDENTIAL_COMPACT_KEYS:
+        return True
+    return ("api" in token_set and "key" in token_set) or (
+        "private" in token_set and "key" in token_set
+    )
 
 
 class DataLicenseProfile(DomainModel):
@@ -220,9 +252,8 @@ class CaptureStore:
     def _reject_credentials(cls, value: Any, path: str = "request") -> None:
         if isinstance(value, Mapping):
             for key, item in value.items():
-                normalized_key = key.lower().replace("-", "_")
                 item_path = f"{path}.{key}"
-                if normalized_key in _CREDENTIAL_KEYS:
+                if _is_credential_key(key):
                     raise ReproducibilityError(
                         f"Capture request contains prohibited credential field: {item_path}"
                     )
