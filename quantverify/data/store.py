@@ -58,11 +58,15 @@ def _is_credential_key(key: str) -> bool:
     token_set = set(tokens)
     if token_set & _CREDENTIAL_TOKENS:
         return True
+    if token_set & _CREDENTIAL_COMPACT_KEYS:
+        return True
     compact = "".join(tokens)
     if compact in _CREDENTIAL_COMPACT_KEYS:
         return True
-    return ("api" in token_set and "key" in token_set) or (
-        "private" in token_set and "key" in token_set
+    return (
+        ("api" in token_set and "key" in token_set)
+        or ("private" in token_set and "key" in token_set)
+        or ("access" in token_set and "key" in token_set)
     )
 
 
