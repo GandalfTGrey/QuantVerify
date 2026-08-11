@@ -39,6 +39,16 @@ class CaptureStoreSecretGuardTests(TestCase):
                 "request.headers.X-Api-Key",
             ),
             (
+                "uppercase compact api key header",
+                {"headers": {"X-APIKEY": SECRET_VALUE}},
+                "request.headers.X-APIKEY",
+            ),
+            (
+                "uppercase compact private key header",
+                {"headers": {"X-PRIVATEKEY": SECRET_VALUE}},
+                "request.headers.X-PRIVATEKEY",
+            ),
+            (
                 "camel api key header",
                 {"headers": {"xApiKey": SECRET_VALUE}},
                 "request.headers.xApiKey",
@@ -47,6 +57,11 @@ class CaptureStoreSecretGuardTests(TestCase):
                 "compact api key",
                 {"query": {"apikey": SECRET_VALUE}},
                 "request.query.apikey",
+            ),
+            (
+                "aws access key id",
+                {"query": {"AWSAccessKeyId": SECRET_VALUE}},
+                "request.query.AWSAccessKeyId",
             ),
             (
                 "bearer token",
