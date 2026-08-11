@@ -253,11 +253,11 @@ class CaptureStore:
         if isinstance(value, Mapping):
             for key, item in value.items():
                 item_path = f"{path}.{key}"
+                cls._reject_credentials(item, item_path)
                 if _is_credential_key(key):
                     raise ReproducibilityError(
                         f"Capture request contains prohibited credential field: {item_path}"
                     )
-                cls._reject_credentials(item, item_path)
         elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             for index, item in enumerate(value):
                 cls._reject_credentials(item, f"{path}[{index}]")
