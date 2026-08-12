@@ -307,6 +307,7 @@ class DatasetReleaseRefTests(TestCase):
         invalid_calendar = candidate.calendar.model_copy(update={"content_hash": "bad"})
         unsafe_values = (
             candidate.model_copy(update={"normalized_content_hash": "bad"}),
+            candidate.model_copy(update={"source_resolution_policy_id": "latest"}),
             candidate.model_copy(update={"calendar": invalid_calendar}),
             candidate.model_copy(update={"eligible_intervals": []}),
             candidate.model_copy(update={"eligible_intervals": ({"bad": "value"},)}),
@@ -377,6 +378,10 @@ class DatasetReleaseExperimentIdentityTests(TestCase):
                 ExperimentConfig.model_validate(
                     {**candidate.model_dump(mode="python"), "universe_id": invalid}
                 )
+
+        unsafe = candidate.model_copy(update={"universe_id": "QQQ+DIA"})
+        with self.assertRaisesRegex(ValidationError, "canonical single-asset universe"):
+            _ = unsafe.experiment_id
 
     def test_experiment_identity_revalidates_unsafe_release_copy(self) -> None:
         candidate = experiment(release())
