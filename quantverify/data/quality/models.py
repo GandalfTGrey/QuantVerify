@@ -190,6 +190,17 @@ class QualityEvaluationContext(DomainModel):
             raise ValueError("calendar_id must match expected session identity")
         if len(self.evidence_refs) != len(self.normalized_input_refs):
             raise ValueError("raw and normalized lineage reference counts must match")
+
+        evidence_ids = tuple(evidence.evidence_id for evidence in self.evidence_refs)
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("active quality sources must have unique evidence identities")
+
+        providers = tuple(evidence.provider for evidence in self.evidence_refs)
+        if len(providers) != len(set(providers)):
+            raise ValueError(
+                "active quality sources must represent independent providers; "
+                "same-provider historical observations belong in RevisionPair"
+            )
         return self
 
 
