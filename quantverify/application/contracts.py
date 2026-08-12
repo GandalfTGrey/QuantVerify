@@ -411,6 +411,12 @@ class InspectResult(DomainModel):
             or not (timestamp[:8] + timestamp[9:-1]).isdigit()
         ):
             raise ValueError("artifact v1 manifest filename is not canonical")
+        try:
+            parsed_timestamp = datetime.strptime(timestamp, "%Y%m%dT%H%M%S%fZ")
+        except ValueError:
+            raise ValueError("artifact v1 manifest timestamp is invalid") from None
+        if parsed_timestamp.strftime("%Y%m%dT%H%M%S%fZ") != timestamp:
+            raise ValueError("artifact v1 manifest timestamp is not canonical")
         return self
 
     def _revalidated(self) -> InspectResult:

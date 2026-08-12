@@ -451,6 +451,15 @@ class BoundaryResultTests(TestCase):
             result.manifest_path.replace(artifact_hash, "e" * 64),
             result.manifest_path.replace(manifest_hash, "e" * 64),
             result.manifest_path.replace("20260812T010203123456Z", "bad-stamp"),
+            result.manifest_path.replace(
+                "20260812T010203123456Z", "20260230T250061999999Z"
+            ),
+            result.manifest_path.replace(
+                "20260812T010203123456Z", "99999999T999999999999Z"
+            ),
+            result.manifest_path.replace(
+                "20260812T010203123456Z", "00000000T000000000000Z"
+            ),
             f"run_manifests/{run_id}/{artifact_hash}/extra/"
             f"20260812T010203123456Z-{manifest_hash}.json",
         )
