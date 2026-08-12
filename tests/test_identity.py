@@ -46,6 +46,9 @@ def make_config(parameters: dict[str, int] | None = None) -> ExperimentConfig:
 
 
 class IdentityTests(TestCase):
+    def test_legacy_snapshot_experiment_identity_is_backward_compatible(self) -> None:
+        self.assertEqual(make_config().experiment_id, "exp_f7860a06bca849ddbea71387")
+
     def test_parameter_order_does_not_change_experiment_identity(self) -> None:
         left = make_config({"short": 10, "long": 50})
         right = make_config({"long": 50, "short": 10})
