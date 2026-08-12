@@ -107,6 +107,40 @@ class CaptureStoreAtomicPublishTests(TestCase):
             self.assertEqual(temporary_objects(root), [])
             self.assertFalse((root / "manifests").exists())
 
+    def test_unverifiable_existing_object_fails_closed_and_cleans_temporary_file(self) -> None:
+        original = capture()
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = CaptureStore(root)
+            canonical_path = (
+                root
+                / "captures"
+                / original.provider
+                / original.content_hash[:2]
+                / f"{original.content_hash}.json"
+            )
+            canonical_path.parent.mkdir(parents=True)
+            canonical_path.write_bytes(original.content_bytes())
+
+            with (
+                patch("quantverify.data.store.os.link", side_effect=FileExistsError()),
+                patch.object(Path, "read_bytes", side_effect=OSError("unreadable canonical")),
+                self.assertRaisesRegex(
+                    ReproducibilityError,
+                    "Immutable capture content collision cannot be verified",
+                ),
+            ):
+                store.write(
+                    original,
+                    adapter_version="fixture-adapter-1.0.0",
+                    license_profile=LICENSE,
+                    stored_at=STORED_AT,
+                )
+
+            self.assertTrue(canonical_path.exists())
+            self.assertEqual(temporary_objects(root), [])
+            self.assertFalse((root / "manifests").exists())
+
     def test_preexisting_partial_canonical_object_is_detected_not_overwritten(self) -> None:
         original = capture()
         with TemporaryDirectory() as directory:
