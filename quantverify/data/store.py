@@ -25,16 +25,29 @@ _CREDENTIAL_TOKENS = frozenset(
         "bearer",
         "cookie",
         "cookies",
+        "credential",
+        "credentials",
         "passwd",
         "password",
         "secret",
+        "signature",
         "token",
     }
 )
 _CREDENTIAL_COMPACT_KEYS = frozenset(
     {
+        "accesskey",
+        "accesskeyid",
+        "accesstoken",
         "apikey",
+        "authtoken",
+        "clientsecret",
         "privatekey",
+        "refreshtoken",
+        "secretaccesskey",
+        "secretkey",
+        "securitytoken",
+        "sessiontoken",
     }
 )
 
