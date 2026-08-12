@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from decimal import Decimal
 
+from quantverify.core.enums import SessionLabelPolicy
 from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import SessionSchedule, TargetPosition
 from quantverify.data.models import NormalizedBar
@@ -18,6 +19,8 @@ def price_above_sma_targets(
     schedule: SessionSchedule,
 ) -> tuple[TargetPosition, ...]:
     """Create long/flat targets at the next session open from close-based signals."""
+    if schedule.calendar.session_label_policy is not SessionLabelPolicy.CLOSE_LOCAL_DATE:
+        raise DataQualityError("SMA strategy v1 requires close-local-date session labels")
     bar_sessions = tuple(bar.session for bar in bars)
     expected_sessions = tuple(session.session for session in schedule.sessions)
     if bar_sessions != expected_sessions:
@@ -43,13 +46,17 @@ def price_above_sma_targets(
             continue
         decision_bar = bars[index]
         next_session = schedule.sessions[index + 1]
-        if decision_bar.available_at >= next_session.session_open_at:
+        dependency_start = index - window + 1
+        decision_at = max(
+            bar.available_at for bar in bars[dependency_start : index + 1]
+        )
+        if decision_at >= next_session.session_open_at:
             raise DataQualityError("Signal is not available before the next session open")
         weight = Decimal("1") if decision_bar.close > average else Decimal("0")
         targets.append(
             TargetPosition(
                 asset=asset,
-                decision_at=decision_bar.available_at,
+                decision_at=decision_at,
                 effective_at=next_session.session_open_at,
                 weight=weight,
             )

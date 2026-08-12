@@ -18,7 +18,7 @@ from quantverify.core.exceptions import ReproducibilityError
 from quantverify.core.models import DataSnapshot, EngineVersion, RuntimeContext
 from quantverify.engines.reference import LongFlatReferenceEngine
 from quantverify.strategies import price_above_sma_targets
-from tests.test_trend_strategy import load_bars, schedule_for
+from tests.test_trend_strategy import load_bars, load_schedule
 
 CREATED_AT = datetime(2026, 8, 11, 1, 2, 3, tzinfo=UTC)
 RUNTIME = RuntimeContext(
@@ -41,7 +41,11 @@ RUN_ID = f"run_{'e' * 24}"
 
 def build_result(*, commission_bps: Decimal = Decimal("0")):
     bars = load_bars()[:7]
-    targets = price_above_sma_targets(bars, window=3, schedule=schedule_for(bars))
+    targets = price_above_sma_targets(
+        bars,
+        window=3,
+        schedule=load_schedule(session_count=len(bars)),
+    )
     return LongFlatReferenceEngine().run(
         bars,
         targets,

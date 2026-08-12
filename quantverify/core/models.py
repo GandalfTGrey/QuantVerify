@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -16,6 +16,7 @@ from quantverify.core.enums import (
     DecisionTime,
     ExecutionPrice,
     SeriesSourceKind,
+    SessionLabelPolicy,
 )
 from quantverify.core.identity import stable_hash
 
@@ -65,20 +66,52 @@ class TradingSession(DomainModel):
         return self
 
 
-class SessionSchedule(DomainModel):
-    """Exact expected sessions for an input range, not an inferred row sequence."""
+class CalendarArtifactRef(DomainModel):
+    """Immutable provenance and label semantics for an exchange calendar artifact."""
 
     calendar_id: str = Field(min_length=1, max_length=128)
     calendar_version: str = Field(min_length=1, max_length=64)
     timezone: str = Field(min_length=1, max_length=64)
-    sessions: tuple[TradingSession, ...] = Field(min_length=1)
+    session_label_policy: SessionLabelPolicy
+    source_id: str = Field(min_length=1, max_length=128)
+    source_version: str = Field(min_length=1, max_length=64)
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
     @model_validator(mode="after")
-    def validate_schedule(self) -> SessionSchedule:
+    def validate_timezone(self) -> CalendarArtifactRef:
         try:
             ZoneInfo(self.timezone)
         except ZoneInfoNotFoundError as exc:
             raise ValueError(f"unknown IANA timezone: {self.timezone}") from exc
+        return self
+
+
+class SessionSchedule(DomainModel):
+    """Exact expected sessions for an input range, not an inferred row sequence."""
+
+    requested_start: date
+    requested_end: date
+    calendar: CalendarArtifactRef
+    sessions: tuple[TradingSession, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> SessionSchedule:
+        if self.requested_start > self.requested_end:
+            raise ValueError("requested_start must not be later than requested_end")
+
+        timezone = ZoneInfo(self.calendar.timezone)
+        policy = self.calendar.session_label_policy
+        for trading_session in self.sessions:
+            if not self.requested_start <= trading_session.session <= self.requested_end:
+                raise ValueError("session label must be contained in the requested range")
+            if policy is SessionLabelPolicy.CLOSE_LOCAL_DATE:
+                expected_label = trading_session.session_close_at.astimezone(timezone).date()
+                if trading_session.session != expected_label:
+                    raise ValueError("session label must match the local close date")
+            elif policy is SessionLabelPolicy.OPEN_LOCAL_DATE:
+                expected_label = trading_session.session_open_at.astimezone(timezone).date()
+                if trading_session.session != expected_label:
+                    raise ValueError("session label must match the local open date")
 
         for previous, current in zip(self.sessions, self.sessions[1:], strict=False):
             if previous.session >= current.session:
@@ -89,7 +122,23 @@ class SessionSchedule(DomainModel):
 
     @property
     def schedule_id(self) -> str:
-        return stable_hash(self, namespace="session-schedule")
+        if not isinstance(self.sessions, tuple):
+            raise ValueError("sessions must remain an immutable tuple")
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        payload = {
+            "requested_start": validated.requested_start,
+            "requested_end": validated.requested_end,
+            "calendar": validated.calendar,
+            "sessions": tuple(
+                {
+                    "session": item.session,
+                    "session_open_at": item.session_open_at.astimezone(UTC),
+                    "session_close_at": item.session_close_at.astimezone(UTC),
+                }
+                for item in validated.sessions
+            ),
+        }
+        return stable_hash(payload, namespace="session-schedule")
 
 
 class SeriesDescriptor(DomainModel):
@@ -104,12 +153,12 @@ class SeriesDescriptor(DomainModel):
     source_schema_version: str = Field(min_length=1, max_length=32)
     producer_id: str = Field(min_length=1, max_length=128)
     producer_version: str = Field(min_length=1, max_length=64)
-    calendar_id: str = Field(min_length=1, max_length=128)
-    calendar_version: str = Field(min_length=1, max_length=64)
+    calendar: CalendarArtifactRef
 
     @property
-    def series_id(self) -> str:
-        return stable_hash(self, namespace="market-series")
+    def descriptor_id(self) -> str:
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        return stable_hash(validated, namespace="series-descriptor")
 
 
 class DataSnapshot(DomainModel):

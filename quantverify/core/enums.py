@@ -26,6 +26,12 @@ class SeriesSourceKind(StrEnum):
     DATASET_RELEASE = "dataset_release"
 
 
+class SessionLabelPolicy(StrEnum):
+    CLOSE_LOCAL_DATE = "close_local_date"
+    OPEN_LOCAL_DATE = "open_local_date"
+    CALENDAR_DEFINED = "calendar_defined"
+
+
 class DecisionTime(StrEnum):
     BAR_OPEN = "bar_open"
     BAR_CLOSE = "bar_close"

@@ -5,7 +5,7 @@ from quantverify.core.exceptions import DataQualityError
 from quantverify.engines.reference import LongFlatReferenceEngine, TradeSide
 from quantverify.metrics import maximum_drawdown, total_return
 from quantverify.strategies import price_above_sma_targets
-from tests.test_trend_strategy import load_bars, schedule_for
+from tests.test_trend_strategy import load_bars, load_schedule
 
 
 class ReferenceEngineGoldenTests(TestCase):
@@ -14,7 +14,7 @@ class ReferenceEngineGoldenTests(TestCase):
         self.targets = price_above_sma_targets(
             self.bars,
             window=3,
-            schedule=schedule_for(self.bars),
+            schedule=load_schedule(session_count=len(self.bars)),
         )
         self.engine = LongFlatReferenceEngine()
 

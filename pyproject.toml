@@ -13,6 +13,7 @@ authors = [{ name = "QuantVerify Contributors" }]
 dependencies = [
   "pydantic>=2.10,<3",
   "PyYAML>=6.0,<7",
+  "tzdata>=2025.2,<2027",
 ]
 
 [project.optional-dependencies]

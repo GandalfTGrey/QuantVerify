@@ -6,9 +6,9 @@ from unittest import TestCase
 
 import yaml
 
-from quantverify.core.enums import AssetClass
+from quantverify.core.enums import AssetClass, SessionLabelPolicy
 from quantverify.core.exceptions import DataQualityError
-from quantverify.core.models import AssetId, SessionSchedule, TradingSession
+from quantverify.core.models import AssetId, SessionSchedule
 from quantverify.data.models import NormalizedBar
 from quantverify.features.moving_average import simple_moving_average
 from quantverify.strategies.trend import price_above_sma_targets
@@ -39,20 +39,20 @@ def load_bars() -> tuple[NormalizedBar, ...]:
         )
 
 
-def schedule_for(bars: tuple[NormalizedBar, ...]) -> SessionSchedule:
-    return SessionSchedule(
-        calendar_id="XNAS",
-        calendar_version="golden-v1",
-        timezone="America/New_York",
-        sessions=tuple(
-            TradingSession(
-                session=bar.session,
-                session_open_at=bar.session_open_at,
-                session_close_at=bar.session_close_at,
-            )
-            for bar in bars
-        ),
+def load_schedule(*, session_count: int | None = None) -> SessionSchedule:
+    raw = yaml.safe_load(
+        (FIXTURES / "xnas_sessions_2026-01-02_2026-01-14.yaml").read_text(
+            encoding="utf-8"
+        )
     )
+    if session_count is not None:
+        raw["sessions"] = raw["sessions"][:session_count]
+        raw["requested_end"] = raw["sessions"][-1]["session"]
+    return SessionSchedule.model_validate(raw)
+
+
+def replace_bar(bar: NormalizedBar, **updates: object) -> NormalizedBar:
+    return NormalizedBar.model_validate({**bar.model_dump(mode="python"), **updates})
 
 
 class MovingAverageTests(TestCase):
@@ -80,7 +80,7 @@ class TrendGoldenTests(TestCase):
         actual = price_above_sma_targets(
             bars,
             window=expected["window"],
-            schedule=schedule_for(bars),
+            schedule=load_schedule(),
         )
         self.assertEqual(len(actual), len(expected["targets"]))
         for target, expected_target in zip(actual, expected["targets"], strict=True):
@@ -90,12 +90,12 @@ class TrendGoldenTests(TestCase):
 
     def test_truncating_future_does_not_change_past_targets(self) -> None:
         bars = load_bars()
-        full = price_above_sma_targets(bars, window=3, schedule=schedule_for(bars))
+        full = price_above_sma_targets(bars, window=3, schedule=load_schedule())
         truncated_bars = bars[:-1]
         truncated = price_above_sma_targets(
             truncated_bars,
             window=3,
-            schedule=schedule_for(truncated_bars),
+            schedule=load_schedule(session_count=len(truncated_bars)),
         )
         self.assertEqual(full[: len(truncated)], truncated)
 
@@ -105,46 +105,82 @@ class TrendGoldenTests(TestCase):
             price_above_sma_targets(
                 bars[:3] + bars[4:],
                 window=3,
-                schedule=schedule_for(bars),
+                schedule=load_schedule(),
             )
 
     def test_single_complete_session_has_no_executable_target(self) -> None:
         bars = load_bars()[:1]
         self.assertEqual(
-            price_above_sma_targets(bars, window=3, schedule=schedule_for(bars)),
+            price_above_sma_targets(bars, window=3, schedule=load_schedule(session_count=1)),
             (),
         )
 
     def test_mixed_assets_fail_closed(self) -> None:
         bars = load_bars()
-        mixed = (*bars[:2], bars[2].model_copy(update={"asset": DIA}), *bars[3:])
+        mixed = (*bars[:2], replace_bar(bars[2], asset=DIA), *bars[3:])
         with self.assertRaisesRegex(DataQualityError, "identical asset"):
-            price_above_sma_targets(mixed, window=3, schedule=schedule_for(bars))
+            price_above_sma_targets(mixed, window=3, schedule=load_schedule())
 
     def test_bar_times_must_match_independent_schedule(self) -> None:
         bars = load_bars()
-        shifted = bars[2].model_copy(
-            update={"session_open_at": datetime(2026, 1, 6, 14, 31, tzinfo=UTC)}
+        shifted = replace_bar(
+            bars[2], session_open_at=datetime(2026, 1, 6, 14, 31, tzinfo=UTC)
         )
         mismatched = (*bars[:2], shifted, *bars[3:])
         with self.assertRaisesRegex(DataQualityError, "timestamps must match"):
-            price_above_sma_targets(mismatched, window=3, schedule=schedule_for(bars))
+            price_above_sma_targets(mismatched, window=3, schedule=load_schedule())
+
+    def test_strategy_rejects_unapproved_session_label_policy(self) -> None:
+        bars = load_bars()
+        trusted = load_schedule()
+        calendar_values = trusted.calendar.model_dump(mode="python")
+        calendar_values["session_label_policy"] = SessionLabelPolicy.CALENDAR_DEFINED
+        schedule_values = trusted.model_dump(mode="python")
+        schedule_values["calendar"] = calendar_values
+        unsupported = SessionSchedule.model_validate(schedule_values)
+        with self.assertRaisesRegex(DataQualityError, "close-local-date"):
+            price_above_sma_targets(bars, window=3, schedule=unsupported)
 
     def test_decision_waits_for_bar_availability(self) -> None:
         bars = load_bars()
-        targets = price_above_sma_targets(bars, window=3, schedule=schedule_for(bars))
+        targets = price_above_sma_targets(bars, window=3, schedule=load_schedule())
         self.assertEqual(targets[0].decision_at, bars[2].available_at)
         self.assertGreater(targets[0].decision_at, bars[2].session_close_at)
 
     def test_late_bar_cannot_execute_at_an_already_open_session(self) -> None:
         bars = load_bars()
-        late = bars[2].model_copy(
-            update={"available_at": datetime(2026, 1, 7, 15, 0, tzinfo=UTC)}
-        )
+        late = replace_bar(bars[2], available_at=datetime(2026, 1, 7, 15, 0, tzinfo=UTC))
         late_bars = (*bars[:2], late, *bars[3:])
         with self.assertRaisesRegex(DataQualityError, "not available"):
             price_above_sma_targets(
                 late_bars,
                 window=3,
-                schedule=schedule_for(late_bars),
+                schedule=load_schedule(),
+            )
+
+    def test_late_historical_dependency_sets_the_decision_watermark(self) -> None:
+        bars = load_bars()
+        delayed = replace_bar(
+            bars[0], available_at=datetime(2026, 1, 7, 13, 0, tzinfo=UTC)
+        )
+        delayed_bars = (delayed, *bars[1:])
+        targets = price_above_sma_targets(
+            delayed_bars,
+            window=3,
+            schedule=load_schedule(),
+        )
+        self.assertEqual(targets[0].decision_at, delayed.available_at)
+        self.assertLess(targets[0].decision_at, targets[0].effective_at)
+
+    def test_historical_dependency_available_after_next_open_fails_closed(self) -> None:
+        bars = load_bars()
+        delayed = replace_bar(
+            bars[0], available_at=datetime(2026, 1, 7, 16, 30, tzinfo=UTC)
+        )
+        delayed_bars = (delayed, *bars[1:])
+        with self.assertRaisesRegex(DataQualityError, "not available"):
+            price_above_sma_targets(
+                delayed_bars,
+                window=3,
+                schedule=load_schedule(),
             )
