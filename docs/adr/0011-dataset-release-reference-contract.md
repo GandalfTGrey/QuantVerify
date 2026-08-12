@@ -31,7 +31,7 @@ A3 已冻结 `QualitySuite.verify_report(...)`：孤立、自洽甚至完整重�
 
 - asset、frequency、adjustment mode；
 - normalized content hash、schema、normalizer id/version；
-- selected raw evidence id 与 selected normalized input id；A4 必须证明发布 bars 精确等于该 normalized observation；
+- selected raw evidence id、selected normalized input id，以及固定的 `single-active-source` resolution policy/version；A4 v1 只接受恰好一个 active source 的 report，并证明发布 bars 精确等于该 normalized observation；多 source report 一律 fail closed，直到独立、版本化的 source-resolution contract 被接受；
 - accepted quality suite id/version；
 - quality policy id/version/content hash；
 - 完整 `CalendarArtifactRef` 与 pinned schedule id/content hash/requested bounds/session count；
@@ -53,16 +53,22 @@ A3 已冻结 `QualitySuite.verify_report(...)`：孤立、自洽甚至完整重�
 
 每个 interval 使用 inclusive `start_session..end_session`，并绑定 exact session count/hash 和一份对相同 requested range 完整重放成功的 A3 report。一个报告不能自行扩张、复制或合并为多个区间。多个 interval 可以表达历史缺口，但必须排序且不重叠。
 
-`supports_consumed_schedule(schedule)` 只做结构 gate：完整、非空的已验证 consumed schedule 必须与 release calendar 完全一致、落在 pinned parent schedule bounds 内，并且其首尾 session 完整落在同一个 eligible interval。跨 gap、越界或 unsafe schedule fail closed。该方法不证明传入 schedule 的交易所权威性，也不替代 verified calendar loader；application 必须先从 release 所绑定的权威 schedule 解析请求的完整实际 sessions（包括 warmup/lookback、估值和下一 open execution session），再调用 containment gate。只检查 performance range 不构成生产准入。
+`structurally_supports_consumed_schedule(schedule)` 只做结构 gate：完整、非空的已验证 consumed schedule 必须与 release calendar 完全一致、落在 pinned parent schedule bounds 内，并且其首尾 session 完整落在同一个 eligible interval。跨 gap、越界或 unsafe schedule fail closed。该方法不证明传入 schedule 的交易所权威性，也不替代 verified calendar loader；application 必须先从 release 所绑定的权威 schedule 解析请求的完整实际 sessions（包括 warmup/lookback、估值和下一 open execution session），逐 session 比对 pinned parent schedule 的 exact slice，再调用 containment gate。只检查 performance range 不构成生产准入。
 
-### 5. Ref 自洽不等于 release authenticity
+### 5. 单资产 release 不得冒充多资产 universe
+
+`DatasetReleaseRef v1` 只描述一个 asset。其唯一合法 experiment universe id 由 release 派生为 `single:<venue>:<symbol>`；`ExperimentConfig` 在构造和 identity 边界执行该约束。QQQ release 因此不能与 `QQQ+DIA`、`us_index_etfs_v1` 等多资产 universe 组合。
+
+S5 双动量或其他多资产实验必须等待独立的 `DatasetBundleRef`/session-range contract；该 contract 必须逐资产绑定每个 release 和共同可消费的 verified schedule range。单资产 release id 不可替代 bundle identity。
+
+### 6. Ref 自洽不等于 release authenticity
 
 和质量报告一样，公开 Pydantic DTO/哈希不能证明生产者身份。调用方手工构造一个自洽 `DatasetReleaseRef` 不等于 Gold 发布。
 
 A4 实现必须提供受控 factory/store，至少：
 
 1. 对完整 A3 输入执行 `verify_report`；
-2. 选定 report 中一个精确 evidence/normalized input pair，重算实际输出 bars 的有序 normalized identity并逐字段一致；禁止平均、拼接或按策略表现选源；
+2. v1 只接受恰好一个 active source；选定该 report 中唯一的 evidence/normalized input pair，重算实际输出 bars 的有序 normalized identity并逐字段一致；多 source report 一律拒绝，禁止 latest、平均、拼接或按策略表现选源；
 3. 验证 calendar artifact/schedule authority 与 interval session hashes；
 4. v1 factory 一律拒绝 adjusted promotion；CA-01 接受并发布新契约后才允许扩展；
 5. immutable publish，并返回由受信 store/manifest anchor 的 ref。
@@ -74,6 +80,7 @@ CORE-05 real-data preflight 必须解析该受信 release，而不是仅接受�
 - 既有 `DataSnapshot` configs、artifact v1 和 fixture tests 保持可读；
 - `ExperimentConfig` 的 dataset union 对旧 config 无 identity 变化；
 - release config 是新增形态，尚不代表 CLI/application 已支持真实数据运行；
+- release-backed config 仅支持派生的单资产 universe；S5/多资产 config 等待 bundle contract；
 - `SeriesDescriptor.source_kind=dataset_release` 可以引用 `release_id` 与 normalized content hash，但不会自行证明 Gold authenticity。
 
 ## Consequences

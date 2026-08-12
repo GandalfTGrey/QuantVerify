@@ -131,7 +131,7 @@ def experiment(dataset: DatasetReleaseRef) -> ExperimentConfig:
             version="1.0.0",
             code_hash="abc1234",
         ),
-        universe_id="qqq",
+        universe_id=dataset.single_asset_universe_id,
         dataset=dataset,
         period=TimeRange(
             start=datetime(2020, 1, 2, tzinfo=UTC),
@@ -162,7 +162,7 @@ class DatasetReleaseRefTests(TestCase):
         baseline = release()
         self.assertEqual(
             baseline.release_id,
-            "drel_1a92b33f4415a43f6a6d9f60",
+            "drel_4310630a375d1f2d79eeb382",
         )
         changes = (
             {"normalized_content_hash": "3" * 64},
@@ -209,27 +209,27 @@ class DatasetReleaseRefTests(TestCase):
             schedule_session_count=251,
         )
         self.assertTrue(
-            candidate.supports_consumed_schedule(
+            candidate.structurally_supports_consumed_schedule(
                 consumed_schedule((date(2020, 1, 2), date(2020, 6, 30)))
             )
         )
         self.assertTrue(
-            candidate.supports_consumed_schedule(
+            candidate.structurally_supports_consumed_schedule(
                 consumed_schedule((date(2020, 7, 2),))
             )
         )
         self.assertFalse(
-            candidate.supports_consumed_schedule(
+            candidate.structurally_supports_consumed_schedule(
                 consumed_schedule((date(2020, 6, 30), date(2020, 7, 2)))
             )
         )
         self.assertFalse(
-            candidate.supports_consumed_schedule(
+            candidate.structurally_supports_consumed_schedule(
                 consumed_schedule((date(2019, 12, 31), date(2020, 1, 2)))
             )
         )
         self.assertFalse(
-            candidate.supports_consumed_schedule(
+            candidate.structurally_supports_consumed_schedule(
                 consumed_schedule(
                     (date(2020, 1, 2),),
                     calendar=calendar_ref(calendar_version="different"),
@@ -297,6 +297,10 @@ class DatasetReleaseRefTests(TestCase):
             release(frequency=BarFrequency.WEEK)
         with self.assertRaisesRegex(ValidationError, "accepted A3 suite"):
             release(quality_suite_version="999")
+        with self.assertRaises(ValidationError):
+            release(source_resolution_policy_id="latest")
+        with self.assertRaises(ValidationError):
+            release(source_resolution_policy_version="2")
 
     def test_identity_and_preflight_revalidate_unsafe_model_copies(self) -> None:
         candidate = release()
@@ -322,7 +326,7 @@ class DatasetReleaseRefTests(TestCase):
             with self.subTest(unsafe=unsafe), self.assertRaises(
                 (ValidationError, ValueError)
             ):
-                unsafe.supports_consumed_schedule(
+                unsafe.structurally_supports_consumed_schedule(
                     consumed_schedule((date(2020, 1, 2), date(2020, 1, 3)))
                 )
 
@@ -330,7 +334,7 @@ class DatasetReleaseRefTests(TestCase):
             update={"content_hash": "bad"}
         )
         with self.assertRaisesRegex(ValueError, "failed integrity validation"):
-            candidate.supports_consumed_schedule(unsafe_schedule)
+            candidate.structurally_supports_consumed_schedule(unsafe_schedule)
 
     def test_series_descriptor_can_bind_release_identity_without_latest_alias(self) -> None:
         candidate = release()
@@ -362,6 +366,17 @@ class DatasetReleaseExperimentIdentityTests(TestCase):
             ExperimentConfig.model_validate(
                 {**candidate.model_dump(mode="python"), "frequency": BarFrequency.WEEK}
             )
+
+    def test_release_backed_experiment_requires_canonical_single_asset_universe(self) -> None:
+        candidate = experiment(release())
+        self.assertEqual(candidate.universe_id, "single:XNAS:QQQ")
+        for invalid in ("qqq", "QQQ+DIA", "us_index_etfs_v1"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValidationError, "canonical single-asset universe"
+            ):
+                ExperimentConfig.model_validate(
+                    {**candidate.model_dump(mode="python"), "universe_id": invalid}
+                )
 
     def test_experiment_identity_revalidates_unsafe_release_copy(self) -> None:
         candidate = experiment(release())

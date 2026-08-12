@@ -275,6 +275,10 @@ class DatasetReleaseRef(DomainModel):
     normalizer_version: str = Field(min_length=1, max_length=128)
     selected_evidence_id: str = Field(pattern=r"^dqe_[a-f0-9]{24}$")
     selected_normalized_input_id: str = Field(pattern=r"^dqi_[a-f0-9]{24}$")
+    source_resolution_policy_id: str = Field(
+        default="single-active-source", pattern=r"^single-active-source$"
+    )
+    source_resolution_policy_version: str = Field(default="1", pattern=r"^1$")
     quality_suite_id: str = Field(min_length=1, max_length=64)
     quality_suite_version: str = Field(min_length=1, max_length=32)
     quality_policy_id: str = Field(min_length=1, max_length=64)
@@ -329,7 +333,14 @@ class DatasetReleaseRef(DomainModel):
                 raise ValueError("eligible intervals must not overlap")
         return self
 
-    def supports_consumed_schedule(self, schedule: SessionSchedule) -> bool:
+    @property
+    def single_asset_universe_id(self) -> str:
+        """Canonical universe identifier for this single-asset release contract."""
+
+        validated_asset = AssetId.model_validate(self.asset.model_dump(mode="python"))
+        return f"single:{validated_asset.venue}:{validated_asset.symbol}"
+
+    def structurally_supports_consumed_schedule(self, schedule: SessionSchedule) -> bool:
         """Structurally gate a verified consumed schedule against one interval."""
 
         self._require_immutable_sequences()
@@ -433,6 +444,13 @@ class ExperimentConfig(DomainModel):
             and self.frequency is not self.dataset.frequency
         ):
             raise ValueError("experiment frequency must match its DatasetReleaseRef")
+        if (
+            isinstance(self.dataset, DatasetReleaseRef)
+            and self.universe_id != self.dataset.single_asset_universe_id
+        ):
+            raise ValueError(
+                "DatasetReleaseRef v1 requires its canonical single-asset universe"
+            )
         return self
 
     @property
