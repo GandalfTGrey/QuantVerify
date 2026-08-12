@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
+import tempfile
 import unicodedata
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -332,10 +336,18 @@ class CaptureStore:
     def _resolve_relative(self, relative_path: Path) -> Path:
         if relative_path.is_absolute() or ".." in relative_path.parts:
             raise ReproducibilityError(f"CaptureStore path must be relative: {relative_path}")
-        resolved = (self._root / relative_path).resolve()
+        lexical_path = self._root / relative_path
+        resolved = lexical_path.resolve()
         if resolved != self._root and self._root not in resolved.parents:
             raise ReproducibilityError(f"CaptureStore path escapes its root: {relative_path}")
-        return resolved
+        current = self._root
+        for part in relative_path.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ReproducibilityError(
+                    f"CaptureStore path contains a symbolic link: {relative_path}"
+                )
+        return lexical_path
 
     @classmethod
     def _reject_credentials(cls, value: Any) -> None:
@@ -382,15 +394,129 @@ class CaptureStore:
             raise ReproducibilityError("DataLicenseProfile failed integrity validation")
         return validated_profile
 
-    @staticmethod
-    def _write_immutable(path: Path, content: bytes, label: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def _write_immutable(self, path: Path, content: bytes, label: str) -> None:
+        """Publish complete bytes atomically without replacing an existing object."""
+
         try:
-            with path.open("xb") as handle:
-                handle.write(content)
-        except FileExistsError:
-            if path.read_bytes() != content:
-                raise ReproducibilityError(f"Immutable {label} collision at {path}") from None
+            path.parent.mkdir(parents=True, exist_ok=True)
+            file_descriptor, temporary_name = tempfile.mkstemp(
+                prefix=".quantverify-",
+                dir=path.parent,
+            )
+        except OSError as error:
+            raise ReproducibilityError(
+                f"Atomic {label} staging failed at {path}"
+            ) from error
+        temporary_path = Path(temporary_name)
+        primary_error: Exception | None = None
+        try:
+            handle_opened = False
+            try:
+                handle = os.fdopen(file_descriptor, "wb")
+                handle_opened = True
+                with handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except OSError as error:
+                if not handle_opened:
+                    with suppress(OSError):
+                        os.close(file_descriptor)
+                raise ReproducibilityError(
+                    f"Atomic {label} staging failed at {path}"
+                ) from error
+            try:
+                os.link(temporary_path, path)
+            except FileExistsError:
+                if not self._existing_regular_file_matches(path, content):
+                    raise ReproducibilityError(
+                        f"Immutable {label} collision at {path}"
+                    ) from None
+            except OSError as error:
+                raise ReproducibilityError(
+                    f"Atomic {label} publication failed at {path}"
+                ) from error
+            try:
+                # Repeat this even for an identical pre-existing object. A prior
+                # attempt may have linked it successfully but failed its directory
+                # sync, so idempotent retry must finish the durability boundary.
+                self._fsync_directory_chain(path.parent)
+            except OSError as error:
+                raise ReproducibilityError(
+                    f"Atomic {label} directory sync failed at {path.parent}"
+                ) from error
+        except Exception as error:
+            primary_error = error
+
+        cleanup_error: ReproducibilityError | None = None
+        try:
+            temporary_path.unlink(missing_ok=True)
+            self._fsync_directory_chain(path.parent)
+        except OSError as error:
+            cleanup_error = ReproducibilityError(
+                f"Atomic {label} staging cleanup failed at {temporary_path}"
+            )
+            cleanup_error.__cause__ = error
+
+        if primary_error is not None:
+            if cleanup_error is not None:
+                primary_error.add_note(str(cleanup_error))
+            raise primary_error
+        if cleanup_error is not None:
+            raise cleanup_error
+
+    @staticmethod
+    def _existing_regular_file_matches(path: Path, content: bytes) -> bool:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError:
+            return False
+        matches = False
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != len(content):
+                matches = False
+            else:
+                chunks: list[bytes] = []
+                remaining = len(content)
+                while remaining:
+                    chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                matches = (
+                    remaining == 0
+                    and b"".join(chunks) == content
+                    and os.read(descriptor, 1) == b""
+                )
+        except OSError:
+            matches = False
+        try:
+            os.close(descriptor)
+        except OSError:
+            matches = False
+        return matches
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_descriptor = os.open(directory, flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+
+    def _fsync_directory_chain(self, directory: Path) -> None:
+        current = directory
+        while True:
+            self._fsync_directory(current)
+            if current == self._root:
+                return
+            if self._root not in current.parents:
+                raise OSError("directory sync path escapes CaptureStore root")
+            current = current.parent
 
     @staticmethod
     def _serialize(payload: Any) -> bytes:
