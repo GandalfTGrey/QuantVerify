@@ -68,7 +68,7 @@ fixture command 只接受 `DataSnapshot`。出现 `DatasetReleaseRef` 必须在 
 
 ### 5. Inspect 与错误边界
 
-`InspectRunCommand` 只接受显式、store-root-relative、canonical POSIX JSON path；absolute、`..`、backslash、控制字符和任何 `latest` path segment/filename 均拒绝。artifact v1 的 `InspectResult` trust scope 固定为 `artifact_v1_integrity_only`，不得称为 verified dataset/release 或 replayable fixture run。
+`InspectRunCommand` 只接受显式、store-root-relative、canonical POSIX JSON path；absolute、`..`、backslash、控制字符和任何 `latest` path segment/filename 均拒绝。artifact v1 的 `InspectResult` 进一步要求路径精确符合 `run_manifests/<run_id>/<artifact_hash>/<UTC stamp>-<manifest_hash>.json`，并与 DTO 的三个 identity 字段逐项一致；trust scope 固定为 `artifact_v1_integrity_only`，不得称为 verified dataset/release 或 replayable fixture run。
 
 稳定 CLI exit mapping：config=2，fixture/preflight/real-data unavailable=3，execution=4，artifact=5，internal=70。`ApplicationFailure` 只携带固定 error code，不接受原始 exception message，避免 credentials、环境变量、host path 或 traceback 越过 CLI 边界。`ApplicationFailure` 和派生身份的 `PlanResult` 在序列化前完整重验证，unsafe `model_copy()` 不能直接生成可信 JSON 输出。
 

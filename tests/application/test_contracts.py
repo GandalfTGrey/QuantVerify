@@ -385,17 +385,23 @@ class BoundaryResultTests(TestCase):
                 InspectRunCommand(manifest_path=invalid)
 
     def test_inspect_result_revalidates_before_serialization(self) -> None:
+        manifest_hash = "d" * 64
+        artifact_hash = "c" * 64
+        run_id = "run_" + "b" * 24
         result = InspectResult(
             experiment_id="exp_" + "a" * 24,
-            run_id="run_" + "b" * 24,
+            run_id=run_id,
             artifact=ArtifactRef(
                 kind="reference_result",
-                uri="artifacts/reference_result/cc/" + "c" * 64 + ".json",
-                content_hash="c" * 64,
+                uri=f"artifacts/reference_result/cc/{artifact_hash}.json",
+                content_hash=artifact_hash,
                 schema_version="reference-result-v1",
             ),
-            manifest_path="run_manifests/run_abc123def456/hash/stamp-hash.json",
-            manifest_hash="d" * 64,
+            manifest_path=(
+                f"run_manifests/{run_id}/{artifact_hash}/"
+                f"20260812T010203123456Z-{manifest_hash}.json"
+            ),
+            manifest_hash=manifest_hash,
             point_count=2,
             trade_count=1,
         )
@@ -409,6 +415,12 @@ class BoundaryResultTests(TestCase):
         ):
             unsafe.model_dump(mode="json")
 
+        for raw_path in (" " + result.manifest_path, b" x.json "):
+            with self.subTest(raw_path=raw_path), self.assertRaisesRegex(
+                PydanticSerializationError, "InspectResult failed integrity validation"
+            ):
+                result.model_copy(update={"manifest_path": raw_path}).model_dump(mode="json")
+
         invalid_artifacts = (
             result.artifact.model_copy(update={"kind": "anything"}),
             result.artifact.model_copy(update={"schema_version": "arbitrary-v9"}),
@@ -418,6 +430,34 @@ class BoundaryResultTests(TestCase):
             with self.subTest(artifact=artifact), self.assertRaises(ValidationError):
                 InspectResult.model_validate(
                     {**result.model_dump(mode="python"), "artifact": artifact}
+                )
+        unsafe_artifacts = (
+            result.artifact.model_copy(update={"kind": " reference_result"}),
+            result.artifact.model_copy(
+                update={"schema_version": "reference-result-v1 "}
+            ),
+            result.artifact.model_copy(update={"uri": result.artifact.uri + " "}),
+            result.artifact.model_copy(
+                update={"content_hash": " " + result.artifact.content_hash}
+            ),
+        )
+        for artifact in unsafe_artifacts:
+            with self.subTest(artifact=artifact), self.assertRaisesRegex(
+                PydanticSerializationError, "InspectResult failed integrity validation"
+            ):
+                result.model_copy(update={"artifact": artifact}).model_dump(mode="json")
+        invalid_paths = (
+            result.manifest_path.replace(run_id, "run_" + "e" * 24),
+            result.manifest_path.replace(artifact_hash, "e" * 64),
+            result.manifest_path.replace(manifest_hash, "e" * 64),
+            result.manifest_path.replace("20260812T010203123456Z", "bad-stamp"),
+            f"run_manifests/{run_id}/{artifact_hash}/extra/"
+            f"20260812T010203123456Z-{manifest_hash}.json",
+        )
+        for manifest_path in invalid_paths:
+            with self.subTest(manifest_path=manifest_path), self.assertRaises(ValidationError):
+                InspectResult.model_validate(
+                    {**result.model_dump(mode="python"), "manifest_path": manifest_path}
                 )
         for field in ("point_count", "trade_count"):
             with self.subTest(field=field), self.assertRaises(ValidationError):

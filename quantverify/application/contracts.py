@@ -107,6 +107,12 @@ def _scientific_identity_value(value: Any) -> Any:
     return value
 
 
+def _require_canonical_text(value: Any, label: str) -> str:
+    if type(value) is not str or value != value.strip():
+        raise ValueError(f"{label} must remain canonical text")
+    return value
+
+
 class ApplicationFailure(DomainModel):
     """Sanitized machine-readable failure; raw exception text is never a field."""
 
@@ -326,6 +332,9 @@ class PlanResult(DomainModel):
         return self
 
     def _revalidated(self) -> PlanResult:
+        _require_canonical_text(self.experiment_id, "plan experiment_id")
+        _require_canonical_text(self.fixture_run_spec_id, "plan fixture_run_spec_id")
+        _require_canonical_text(self.run_id, "plan run_id")
         return type(self).model_validate(
             {
                 "schema_version": self.schema_version,
@@ -362,6 +371,11 @@ class InspectResult(DomainModel):
     point_count: StrictInt = Field(ge=0)
     trade_count: StrictInt = Field(ge=0)
 
+    @field_validator("manifest_path", mode="before")
+    @classmethod
+    def reject_noncanonical_raw_path(cls, value: Any) -> Any:
+        return InspectRunCommand.reject_noncanonical_raw_path(value)
+
     @model_validator(mode="after")
     def validate_manifest_path(self) -> InspectResult:
         artifact = ArtifactRef.model_validate(self.artifact.model_dump(mode="python"))
@@ -377,10 +391,42 @@ class InspectResult(DomainModel):
         ).as_posix()
         if artifact.uri != expected_uri:
             raise ValueError("artifact v1 inspect requires its canonical content URI")
-        InspectRunCommand(manifest_path=self.manifest_path)
+        path = PurePosixPath(
+            InspectRunCommand(manifest_path=self.manifest_path).manifest_path
+        )
+        if len(path.parts) != 4 or path.parts[0] != "run_manifests":
+            raise ValueError("artifact v1 manifest path has an invalid shape")
+        if path.parts[1] != self.run_id:
+            raise ValueError("artifact v1 manifest path does not match run_id")
+        if path.parts[2] != artifact.content_hash:
+            raise ValueError("artifact v1 manifest path does not match artifact hash")
+        expected_suffix = f"-{self.manifest_hash}.json"
+        filename = path.parts[3]
+        timestamp = filename.removesuffix(expected_suffix)
+        if (
+            not filename.endswith(expected_suffix)
+            or len(timestamp) != 22
+            or timestamp[8] != "T"
+            or timestamp[-1] != "Z"
+            or not (timestamp[:8] + timestamp[9:-1]).isdigit()
+        ):
+            raise ValueError("artifact v1 manifest filename is not canonical")
         return self
 
     def _revalidated(self) -> InspectResult:
+        _require_canonical_text(self.experiment_id, "inspect experiment_id")
+        _require_canonical_text(self.run_id, "inspect run_id")
+        _require_canonical_text(self.manifest_hash, "inspect manifest_hash")
+        InspectRunCommand(manifest_path=self.manifest_path)
+        if type(self.artifact) is not ArtifactRef:
+            raise ValueError("inspect artifact must remain an ArtifactRef")
+        for label, value in (
+            ("artifact kind", self.artifact.kind),
+            ("artifact URI", self.artifact.uri),
+            ("artifact content hash", self.artifact.content_hash),
+            ("artifact schema version", self.artifact.schema_version),
+        ):
+            _require_canonical_text(value, label)
         return type(self).model_validate(
             {
                 "schema_version": self.schema_version,
