@@ -16,6 +16,8 @@ from quantverify.metrics import (
     RiskFreePolicy,
     RiskFreeRateKind,
     calculate_metric_set,
+    maximum_drawdown,
+    total_return,
 )
 
 
@@ -141,6 +143,22 @@ class MetricsV1GoldenTests(TestCase):
         self.assertEqual(result.total_return.value, Decimal("-0.2"))
         self.assertEqual(result.max_drawdown.value, Decimal("-0.2"))
 
+    def test_total_loss_is_valid_for_returns_and_terminal_equity(self) -> None:
+        result = calculate_metric_set(
+            metric_input(
+                equity_observations=(equity(1, "100"), equity(2, "0")),
+                return_observations=(period_return(2, "-1"),),
+            )
+        )
+
+        self.assertEqual(result.total_return.value, Decimal("-1"))
+        self.assertEqual(result.cagr.value, Decimal("-1"))
+        self.assertEqual(result.max_drawdown.value, Decimal("-1"))
+        self.assertEqual(result.volatility.value, Decimal("0"))
+        self.assertEqual(result.sharpe.reason, MetricReason.ZERO_VOLATILITY)
+        self.assertEqual(total_return((Decimal("100"), Decimal("0"))), Decimal("-1"))
+        self.assertEqual(maximum_drawdown((Decimal("100"), Decimal("0"))), Decimal("-1"))
+
     def test_sharpe_applies_declared_risk_free_policy(self) -> None:
         observations = (period_return(2, "0.10"), period_return(3, "0.30"))
         zero_rate = calculate_metric_set(
@@ -223,8 +241,20 @@ class MetricsV1GoldenTests(TestCase):
             )
         with self.assertRaises(ValidationError):
             ReturnObservation(observed_on=date(2024, 1, 1), value=Decimal("NaN"))
-        with self.assertRaisesRegex(ValidationError, "greater than -1"):
-            ReturnObservation(observed_on=date(2024, 1, 1), value=Decimal("-1"))
+        with self.assertRaisesRegex(ValidationError, "greater than or equal to -1"):
+            ReturnObservation(observed_on=date(2024, 1, 1), value=Decimal("-1.0001"))
+
+    def test_zero_initial_and_negative_equity_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "initial equity"):
+            metric_input(
+                equity_observations=(equity(1, "0"), equity(2, "100")),
+            )
+        with self.assertRaises(ValidationError):
+            EquityObservation(observed_on=date(2024, 1, 1), equity=Decimal("-0.01"))
+        with self.assertRaisesRegex(ValueError, "initial equity"):
+            total_return((Decimal("0"), Decimal("100")))
+        with self.assertRaisesRegex(ValueError, "subsequent equity"):
+            maximum_drawdown((Decimal("100"), Decimal("-1")))
 
     def test_metric_value_never_presents_nan_or_infinity_as_valid(self) -> None:
         for invalid in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):

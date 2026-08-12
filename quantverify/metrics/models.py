@@ -24,6 +24,7 @@ class MetricModel(BaseModel):
 
 FiniteDecimal = Annotated[Decimal, Field(allow_inf_nan=False)]
 PositiveDecimal = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
+NonNegativeDecimal = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
 
 
 class ReturnKind(StrEnum):
@@ -62,7 +63,7 @@ class MetricReason(StrEnum):
 
 class EquityObservation(MetricModel):
     observed_on: date
-    equity: PositiveDecimal
+    equity: NonNegativeDecimal
 
 
 class ReturnObservation(MetricModel):
@@ -71,8 +72,8 @@ class ReturnObservation(MetricModel):
 
     @model_validator(mode="after")
     def validate_simple_return(self) -> ReturnObservation:
-        if self.value <= Decimal("-1"):
-            raise ValueError("simple return must be greater than -1")
+        if self.value < Decimal("-1"):
+            raise ValueError("simple return must be greater than or equal to -1")
         return self
 
 
@@ -116,6 +117,8 @@ class MetricInput(MetricModel):
 
     @model_validator(mode="after")
     def validate_observation_order(self) -> MetricInput:
+        if self.equity and self.equity[0].equity <= 0:
+            raise ValueError("initial equity must be strictly positive")
         for name, observations in (("equity", self.equity), ("returns", self.returns)):
             dates = tuple(item.observed_on for item in observations)
             if any(left >= right for left, right in pairwise(dates)):

@@ -26,5 +26,7 @@ def maximum_drawdown(equity: Sequence[Decimal]) -> Decimal:
 def _validate_equity(equity: Sequence[Decimal]) -> None:
     if not equity:
         raise ValueError("equity must not be empty")
-    if any(value <= 0 or not value.is_finite() for value in equity):
-        raise ValueError("equity values must be positive and finite")
+    if equity[0] <= 0 or not equity[0].is_finite():
+        raise ValueError("initial equity must be positive and finite")
+    if any(value < 0 or not value.is_finite() for value in equity[1:]):
+        raise ValueError("subsequent equity values must be non-negative and finite")

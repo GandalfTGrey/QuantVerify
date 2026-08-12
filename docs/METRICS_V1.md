@@ -26,10 +26,12 @@ the mathematical reason, including insufficient observations or zero-volatility 
 `failure` carries no value and identifies a numeric calculation failure. NaN and positive or
 negative infinity can never be represented as a valid metric.
 
-Equity must be positive and finite. Simple returns must be finite and greater than `-1`.
-Each observation series must have strictly increasing, unique dates. Metrics can be computed
-independently: missing equity observations do not suppress return-based metrics, and missing
-return observations do not suppress equity-based metrics.
+The initial equity must be strictly positive and finite; subsequent equity may be zero but may
+not be negative. Simple returns must be finite and greater than or equal to `-1`. These bounds
+preserve a legitimate 100% long-only loss while rejecting impossible unlevered losses below
+100%. Each observation series must have strictly increasing, unique dates. Metrics can be
+computed independently: missing equity observations do not suppress return-based metrics, and
+missing return observations do not suppress equity-based metrics.
 
 The risk-free policy is a scalar assumption in v1, but it is never anonymous: its unit,
 `policy_id`, `source_id`, and `source_version` are persisted in the result. A future version
