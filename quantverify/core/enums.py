@@ -15,8 +15,27 @@ class AssetClass(StrEnum):
 
 class BarFrequency(StrEnum):
     DAY = "1d"
+    WEEK = "1w"
+    MONTH = "1mo"
     HOUR = "1h"
     MINUTE = "1m"
+
+
+class SeriesSourceKind(StrEnum):
+    FIXTURE = "fixture"
+    DATASET_RELEASE = "dataset_release"
+
+
+class SessionLabelPolicy(StrEnum):
+    CLOSE_LOCAL_DATE = "close_local_date"
+    OPEN_LOCAL_DATE = "open_local_date"
+    CALENDAR_DEFINED = "calendar_defined"
+
+
+class PeriodCompleteness(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL_CUTOFF = "partial_cutoff"
+    INCOMPLETE_MISSING_DATA = "incomplete_missing_data"
 
 
 class DecisionTime(StrEnum):

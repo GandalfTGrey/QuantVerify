@@ -60,5 +60,10 @@ def stable_hash(value: Any, *, namespace: str, length: int = 24) -> str:
     return f"{namespace}_{digest}"
 
 
+def full_hash(value: Any) -> str:
+    """Return a full SHA-256 over the canonical representation of a value."""
+    return hashlib.sha256(_canonical_json(canonicalize(value)).encode()).hexdigest()
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

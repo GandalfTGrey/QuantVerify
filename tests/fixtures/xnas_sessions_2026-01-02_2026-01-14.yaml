@@ -1,0 +1,39 @@
+requested_start: 2026-01-02
+requested_end: 2026-01-14
+calendar:
+  calendar_id: XNAS
+  calendar_version: golden-v1
+  timezone: America/New_York
+  session_label_policy: close_local_date
+  source_id: independent-golden-calendar
+  source_version: "1"
+  content_hash: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+sessions:
+  - session: 2026-01-02
+    session_open_at: 2026-01-02T14:30:00+00:00
+    session_close_at: 2026-01-02T21:00:00+00:00
+  - session: 2026-01-05
+    session_open_at: 2026-01-05T14:30:00+00:00
+    session_close_at: 2026-01-05T21:00:00+00:00
+  - session: 2026-01-06
+    session_open_at: 2026-01-06T14:30:00+00:00
+    session_close_at: 2026-01-06T21:00:00+00:00
+  - session: 2026-01-07
+    session_open_at: 2026-01-07T14:30:00+00:00
+    session_close_at: 2026-01-07T21:00:00+00:00
+  - session: 2026-01-08
+    session_open_at: 2026-01-08T14:30:00+00:00
+    session_close_at: 2026-01-08T21:00:00+00:00
+  - session: 2026-01-09
+    session_open_at: 2026-01-09T14:30:00+00:00
+    session_close_at: 2026-01-09T21:00:00+00:00
+  - session: 2026-01-12
+    session_open_at: 2026-01-12T14:30:00+00:00
+    session_close_at: 2026-01-12T21:00:00+00:00
+  - session: 2026-01-13
+    session_open_at: 2026-01-13T14:30:00+00:00
+    session_close_at: 2026-01-13T21:00:00+00:00
+  - session: 2026-01-14
+    session_open_at: 2026-01-14T14:30:00+00:00
+    session_close_at: 2026-01-14T21:00:00+00:00
+content_hash: 0bccb21e6fbfcd79c269a7406bec9bd70220c097512b6c748638c8a68f66a860

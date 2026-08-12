@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from calendar import monthrange
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated
 
 from pydantic import Field, model_validator
 
-from quantverify.core.models import AssetId, DomainModel
+from quantverify.core.enums import BarFrequency, PeriodCompleteness
+from quantverify.core.identity import stable_hash
+from quantverify.core.models import AssetId, DomainModel, SeriesDescriptor, SessionSchedule
 
 PositiveDecimal = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
@@ -53,6 +56,147 @@ class NormalizedBar(DomainModel):
         if not self.low <= self.close <= self.high:
             raise ValueError("close must be between low and high")
         return self
+
+
+class DerivedPeriodBar(DomainModel):
+    """A causal weekly/monthly bar derived from an immutable source series."""
+
+    series: SeriesDescriptor
+    period_start: date
+    period_end: date
+    constituent_schedule: SessionSchedule
+    expected_schedule: SessionSchedule
+    constituent_available_at: tuple[datetime, ...] = Field(min_length=1)
+    cutoff_at: datetime
+    open: PositiveDecimal
+    high: PositiveDecimal
+    low: PositiveDecimal
+    close: PositiveDecimal
+    volume: NonNegativeDecimal
+
+    @model_validator(mode="after")
+    def validate_period_semantics(self) -> DerivedPeriodBar:
+        if self.series.frequency not in (BarFrequency.WEEK, BarFrequency.MONTH):
+            raise ValueError("derived period bars require weekly or monthly frequency")
+        self._validate_period_bounds()
+        if self.constituent_schedule.calendar != self.expected_schedule.calendar:
+            raise ValueError("constituent and expected schedules must use one calendar artifact")
+        if self.series.calendar != self.expected_schedule.calendar:
+            raise ValueError("series and period schedules must use one calendar artifact")
+        for schedule in (self.constituent_schedule, self.expected_schedule):
+            if (
+                schedule.requested_start != self.period_start
+                or schedule.requested_end != self.period_end
+            ):
+                raise ValueError("period schedules must cover the complete period boundary")
+
+        actual_sessions = self.constituent_schedule.sessions
+        expected_sessions = self.expected_schedule.sessions
+        if actual_sessions != expected_sessions[: len(actual_sessions)]:
+            raise ValueError("constituent sessions must be an exact prefix of expected sessions")
+        if len(self.constituent_available_at) != len(actual_sessions):
+            raise ValueError("constituent availability count must match constituent sessions")
+        if self.cutoff_at.tzinfo is None or any(
+            timestamp.tzinfo is None for timestamp in self.constituent_available_at
+        ):
+            raise ValueError("cutoff and constituent availability must be timezone-aware")
+        for trading_session, available_at in zip(
+            actual_sessions,
+            self.constituent_available_at,
+            strict=True,
+        ):
+            if available_at < trading_session.session_close_at:
+                raise ValueError("constituent availability cannot precede its session close")
+            if available_at > self.cutoff_at:
+                raise ValueError("constituent availability cannot be later than cutoff")
+        if self.high < self.low:
+            raise ValueError("high must be greater than or equal to low")
+        if not self.low <= self.open <= self.high:
+            raise ValueError("open must be between low and high")
+        if not self.low <= self.close <= self.high:
+            raise ValueError("close must be between low and high")
+        return self
+
+    def _validate_period_bounds(self) -> None:
+        if self.series.frequency is BarFrequency.WEEK:
+            if self.period_start.weekday() != 0 or self.period_end != self.period_start + timedelta(
+                days=6
+            ):
+                raise ValueError("weekly period must use a Monday through Sunday boundary")
+        elif (
+            self.period_start.day != 1
+            or self.period_end.day != monthrange(self.period_end.year, self.period_end.month)[1]
+            or (self.period_start.year, self.period_start.month)
+            != (self.period_end.year, self.period_end.month)
+        ):
+            raise ValueError("monthly period must use one natural calendar month")
+
+    @property
+    def constituent_start(self) -> date:
+        return self.constituent_schedule.sessions[0].session
+
+    @property
+    def constituent_end(self) -> date:
+        return self.constituent_schedule.sessions[-1].session
+
+    @property
+    def constituent_count(self) -> int:
+        return len(self.constituent_schedule.sessions)
+
+    @property
+    def expected_constituent_count(self) -> int:
+        return len(self.expected_schedule.sessions)
+
+    @property
+    def period_open_at(self) -> datetime:
+        return self.constituent_schedule.sessions[0].session_open_at
+
+    @property
+    def period_close_at(self) -> datetime:
+        return self.constituent_schedule.sessions[-1].session_close_at
+
+    @property
+    def available_at(self) -> datetime:
+        return max(self.constituent_available_at)
+
+    @property
+    def complete(self) -> bool:
+        return self.completeness is PeriodCompleteness.COMPLETE
+
+    @property
+    def completeness(self) -> PeriodCompleteness:
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        actual_sessions = validated.constituent_schedule.sessions
+        expected_sessions = validated.expected_schedule.sessions
+        if actual_sessions == expected_sessions:
+            return PeriodCompleteness.COMPLETE
+        first_omitted = expected_sessions[len(actual_sessions)]
+        if validated.cutoff_at < first_omitted.session_close_at:
+            return PeriodCompleteness.PARTIAL_CUTOFF
+        return PeriodCompleteness.INCOMPLETE_MISSING_DATA
+
+    @property
+    def period_bar_id(self) -> str:
+        if not isinstance(self.constituent_available_at, tuple):
+            raise ValueError("constituent availability must remain an immutable tuple")
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        payload = {
+            "series": validated.series,
+            "period_start": validated.period_start,
+            "period_end": validated.period_end,
+            "constituent_schedule_id": validated.constituent_schedule.schedule_id,
+            "expected_schedule_id": validated.expected_schedule.schedule_id,
+            "constituent_available_at": tuple(
+                timestamp.astimezone(UTC) for timestamp in validated.constituent_available_at
+            ),
+            "cutoff_at": validated.cutoff_at.astimezone(UTC),
+            "open": validated.open,
+            "high": validated.high,
+            "low": validated.low,
+            "close": validated.close,
+            "volume": validated.volume,
+        }
+        return stable_hash(payload, namespace="period-bar")
 
 
 class CrossSourcePolicy(DomainModel):
