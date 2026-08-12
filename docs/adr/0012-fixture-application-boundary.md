@@ -47,7 +47,7 @@ S1-S4 需要各自显式 adapter 与周期/schedule 输入；S5 还需要 Datase
 
 ### 3. Command 与 inbound handler
 
-冻结 `PlanFixtureCommand`、`RunFixtureCommand`、`InspectRunCommand`，以及 `PlanResult`、artifact-v1-only `InspectResult`。
+冻结 `PlanFixtureCommand`、`RunFixtureCommand`、`InspectRunCommand`，以及 `PlanResult`、artifact-v1-only `InspectResult`。`PlanResult.disposition=structurally_ready` 只表示 DTO、身份和静态 capability 结构通过；它不是 registry-backed fixture admission，也不授权执行。
 
 CORE-05A 只公开：
 
@@ -68,9 +68,9 @@ fixture command 只接受 `DataSnapshot`。出现 `DatasetReleaseRef` 必须在 
 
 ### 5. Inspect 与错误边界
 
-`InspectRunCommand` 只接受显式、store-root-relative、canonical POSIX JSON path；absolute、`..`、backslash 和任何 `latest` path segment 均拒绝。artifact v1 的 `InspectResult` trust scope 固定为 `artifact_v1_integrity_only`，不得称为 verified dataset/release 或 replayable fixture run。
+`InspectRunCommand` 只接受显式、store-root-relative、canonical POSIX JSON path；absolute、`..`、backslash、控制字符和任何 `latest` path segment/filename 均拒绝。artifact v1 的 `InspectResult` trust scope 固定为 `artifact_v1_integrity_only`，不得称为 verified dataset/release 或 replayable fixture run。
 
-稳定 CLI exit mapping：config=2，fixture/preflight/real-data unavailable=3，execution=4，artifact=5，internal=70。`ApplicationFailure` 只携带固定 error code，不接受原始 exception message，避免 credentials、环境变量、host path 或 traceback 越过 CLI 边界。
+稳定 CLI exit mapping：config=2，fixture/preflight/real-data unavailable=3，execution=4，artifact=5，internal=70。`ApplicationFailure` 只携带固定 error code，不接受原始 exception message，避免 credentials、环境变量、host path 或 traceback 越过 CLI 边界。`ApplicationFailure` 和派生身份的 `PlanResult` 在序列化前完整重验证，unsafe `model_copy()` 不能直接生成可信 JSON 输出。
 
 ## Deferred Hard Gates
 

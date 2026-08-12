@@ -9,7 +9,7 @@ from enum import IntEnum, StrEnum
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, StrictInt, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_serializer, model_validator
 
 from quantverify.core.enums import BarFrequency, DecisionTime, ExecutionPrice
 from quantverify.core.identity import stable_hash
@@ -28,7 +28,7 @@ from quantverify.metrics.models import (
 
 
 class PlanDisposition(StrEnum):
-    READY = "ready"
+    STRUCTURALLY_READY = "structurally_ready"
 
 
 class ArtifactTrustScope(StrEnum):
@@ -98,10 +98,20 @@ class ApplicationFailure(DomainModel):
 
     @property
     def exit_code(self) -> int:
-        validated = type(self).model_validate(
-            {"schema_version": self.schema_version, "code": self.code}
-        )
+        validated = self._safe_revalidated()
         return int(_ERROR_EXIT_CODES[validated.code])
+
+    def _safe_revalidated(self) -> ApplicationFailure:
+        try:
+            return type(self).model_validate(
+                {"schema_version": self.schema_version, "code": self.code}
+            )
+        except (TypeError, ValueError):
+            return type(self)(code=ApplicationErrorCode.INTERNAL_ERROR)
+
+    @model_serializer(mode="wrap")
+    def serialize_validated(self, handler: Any) -> Any:
+        return handler(self._safe_revalidated())
 
 
 class ConsumedSessionRange(DomainModel):
@@ -110,7 +120,7 @@ class ConsumedSessionRange(DomainModel):
     schema_version: Literal["consumed-session-range-v1"] = "consumed-session-range-v1"
     start_session: date
     end_session: date
-    session_count: int = Field(ge=1)
+    session_count: StrictInt = Field(ge=1)
     schedule_id: str = Field(pattern=r"^session-schedule_[a-f0-9]{24}$")
     schedule_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -139,7 +149,7 @@ class FixtureMetricPolicy(DomainModel):
     schema_version: Literal["fixture-metric-policy-v1"] = "fixture-metric-policy-v1"
     return_basis: ReturnBasis
     annualization: AnnualizationPolicy
-    volatility_ddof: int = Field(ge=0)
+    volatility_ddof: StrictInt = Field(ge=0)
     risk_free: RiskFreePolicy
 
 
@@ -243,6 +253,8 @@ class InspectRunCommand(DomainModel):
     def validate_portable_relative_path(self) -> InspectRunCommand:
         if "\\" in self.manifest_path:
             raise ValueError("manifest_path must use portable POSIX separators")
+        if any(ord(character) < 32 or ord(character) == 127 for character in self.manifest_path):
+            raise ValueError("manifest_path must not contain control characters")
         path = PurePosixPath(self.manifest_path)
         if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
             raise ValueError("manifest_path must be a canonical relative path")
@@ -257,7 +269,9 @@ class InspectRunCommand(DomainModel):
 
 class PlanResult(DomainModel):
     schema_version: Literal["fixture-plan-result-v1"] = "fixture-plan-result-v1"
-    disposition: Literal[PlanDisposition.READY] = PlanDisposition.READY
+    disposition: Literal[PlanDisposition.STRUCTURALLY_READY] = (
+        PlanDisposition.STRUCTURALLY_READY
+    )
     command: PlanFixtureCommand
     experiment_id: str = Field(pattern=r"^exp_[a-f0-9]{12,64}$")
     fixture_run_spec_id: str = Field(pattern=r"^fixture-run-spec_[a-f0-9]{24}$")
@@ -284,6 +298,26 @@ class PlanResult(DomainModel):
             raise ValueError("plan run_id does not match its command")
         return self
 
+    def _revalidated(self) -> PlanResult:
+        return type(self).model_validate(
+            {
+                "schema_version": self.schema_version,
+                "disposition": self.disposition,
+                "command": self.command,
+                "experiment_id": self.experiment_id,
+                "fixture_run_spec_id": self.fixture_run_spec_id,
+                "run_id": self.run_id,
+            }
+        )
+
+    @model_serializer(mode="wrap")
+    def serialize_validated(self, handler: Any) -> Any:
+        try:
+            validated = self._revalidated()
+        except (TypeError, ValueError):
+            raise ValueError("PlanResult failed integrity validation") from None
+        return handler(validated)
+
 
 class InspectResult(DomainModel):
     """Portable summary; authority comes from the handler's verified store read."""
@@ -306,3 +340,27 @@ class InspectResult(DomainModel):
         ArtifactRef.model_validate(self.artifact.model_dump(mode="python"))
         InspectRunCommand(manifest_path=self.manifest_path)
         return self
+
+    def _revalidated(self) -> InspectResult:
+        return type(self).model_validate(
+            {
+                "schema_version": self.schema_version,
+                "integrity_status": self.integrity_status,
+                "trust_scope": self.trust_scope,
+                "experiment_id": self.experiment_id,
+                "run_id": self.run_id,
+                "artifact": self.artifact,
+                "manifest_path": self.manifest_path,
+                "manifest_hash": self.manifest_hash,
+                "point_count": self.point_count,
+                "trade_count": self.trade_count,
+            }
+        )
+
+    @model_serializer(mode="wrap")
+    def serialize_validated(self, handler: Any) -> Any:
+        try:
+            validated = self._revalidated()
+        except (TypeError, ValueError):
+            raise ValueError("InspectResult failed integrity validation") from None
+        return handler(validated)

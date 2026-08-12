@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest import TestCase
 
 from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError
 
 import quantverify.application as application_api
 from quantverify.application import (
@@ -14,6 +15,7 @@ from quantverify.application import (
     DailyTrendParameters,
     FixtureMetricPolicy,
     FixtureRunSpec,
+    InspectResult,
     InspectRunCommand,
     PlanFixtureCommand,
     PlanResult,
@@ -21,6 +23,7 @@ from quantverify.application import (
 )
 from quantverify.core.enums import AdjustmentMode, BarFrequency
 from quantverify.core.models import (
+    ArtifactRef,
     CostModel,
     DatasetReleaseRef,
     DataSnapshot,
@@ -273,6 +276,45 @@ class FixtureRunSpecTests(TestCase):
                     {**plan.model_dump(mode="python"), field: "run_" + "f" * 24}
                 )
 
+        unsafe_plan = plan.model_copy(update={"run_id": "run_" + "f" * 24})
+        with self.assertRaisesRegex(
+            PydanticSerializationError, "PlanResult failed integrity validation"
+        ) as captured:
+            unsafe_plan.model_dump(mode="json")
+        self.assertNotIn("ffffffff", str(captured.exception))
+        unsafe_command = command.model_copy(
+            update={
+                "spec": command.spec.model_copy(
+                    update={
+                        "execution": command.spec.execution.model_copy(
+                            update={"initial_cash": Decimal("-1")}
+                        )
+                    }
+                )
+            }
+        )
+        with self.assertRaisesRegex(
+            PydanticSerializationError, "PlanResult failed integrity validation"
+        ):
+            plan.model_copy(update={"command": unsafe_command}).model_dump(mode="json")
+
+    def test_scientific_integer_fields_reject_bool(self) -> None:
+        with self.assertRaises(ValidationError):
+            ConsumedSessionRange(
+                start_session=date(2020, 1, 2),
+                end_session=date(2020, 1, 2),
+                session_count=True,
+                schedule_id="session-schedule_" + "1" * 24,
+                schedule_content_hash="2" * 64,
+            )
+        with self.assertRaises(ValidationError):
+            FixtureMetricPolicy(
+                **{
+                    **metric_policy().model_dump(mode="python"),
+                    "volatility_ddof": True,
+                }
+            )
+
 
 class BoundaryResultTests(TestCase):
     def test_run_handler_and_receipt_are_absent_until_core06(self) -> None:
@@ -291,9 +333,36 @@ class BoundaryResultTests(TestCase):
             "run_manifests/file.txt",
             "run_manifests//file.json",
             "run_manifests/latest.json",
+            "run_manifests/evil\x00.json",
+            "run_manifests/evil\n.json",
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 InspectRunCommand(manifest_path=invalid)
+
+    def test_inspect_result_revalidates_before_serialization(self) -> None:
+        result = InspectResult(
+            experiment_id="exp_" + "a" * 24,
+            run_id="run_" + "b" * 24,
+            artifact=ArtifactRef(
+                kind="reference_result",
+                uri="run_artifacts/aa/result.json",
+                content_hash="c" * 64,
+                schema_version="reference-result-v1",
+            ),
+            manifest_path="run_manifests/run_abc123def456/hash/stamp-hash.json",
+            manifest_hash="d" * 64,
+            point_count=2,
+            trade_count=1,
+        )
+        self.assertEqual(
+            result.model_dump(mode="json")["trust_scope"],
+            "artifact_v1_integrity_only",
+        )
+        unsafe = result.model_copy(update={"trust_scope": "replayable"})
+        with self.assertRaisesRegex(
+            PydanticSerializationError, "InspectResult failed integrity validation"
+        ):
+            unsafe.model_dump(mode="json")
 
     def test_failure_has_fixed_code_and_exit_mapping_without_raw_message(self) -> None:
         expected = {
@@ -314,5 +383,7 @@ class BoundaryResultTests(TestCase):
         unsafe = ApplicationFailure(
             code=ApplicationErrorCode.CONFIG_INVALID
         ).model_copy(update={"code": "raw-secret"})
-        with self.assertRaises(ValidationError):
-            _ = unsafe.exit_code
+        self.assertEqual(unsafe.exit_code, 70)
+        serialized = unsafe.model_dump(mode="json")
+        self.assertEqual(serialized["code"], ApplicationErrorCode.INTERNAL_ERROR)
+        self.assertNotIn("raw-secret", str(serialized))
