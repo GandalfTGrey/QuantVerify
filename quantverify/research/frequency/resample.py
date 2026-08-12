@@ -49,6 +49,12 @@ def derive_period_bars(
             if item.session in bars_by_session
         )
         if not observed:
+            first_expected_close = expected_sessions[0].session_close_at
+            if cutoff_at >= first_expected_close:
+                raise DataQualityError(
+                    "Elapsed expected period has no daily observations: "
+                    f"{period_start.isoformat()}..{period_end.isoformat()}"
+                )
             continue
 
         actual_sessions = expected_sessions[: len(observed)]

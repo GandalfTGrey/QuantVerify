@@ -235,6 +235,48 @@ class WeeklyDerivationTests(TestCase):
         self.assertEqual(len(first_week_only), 1)
         self.assertEqual(first_week_only[0].period_bar_id, full[0].period_bar_id)
 
+    def test_elapsed_week_with_no_observations_fails_closed(self) -> None:
+        days = tuple(date(2026, 1, day) for day in (5, 6, 7, 8, 9, 12, 13, 14, 15, 16))
+        schedule = make_schedule(days, start=date(2026, 1, 5), end=date(2026, 1, 18))
+        daily = bars_for(schedule)
+
+        with self.assertRaisesRegex(DataQualityError, "no daily observations"):
+            derive_period_bars(
+                daily[:5],
+                expected_schedule=schedule,
+                series=descriptor(BarFrequency.WEEK),
+                cutoff_at=daily[-1].available_at,
+            )
+
+    def test_unobserved_future_week_is_not_fabricated(self) -> None:
+        days = tuple(date(2026, 1, day) for day in (5, 6, 7, 8, 9, 12, 13, 14, 15, 16))
+        schedule = make_schedule(days, start=date(2026, 1, 5), end=date(2026, 1, 18))
+        daily = bars_for(schedule)
+
+        result = derive_period_bars(
+            daily[:5],
+            expected_schedule=schedule,
+            series=descriptor(BarFrequency.WEEK),
+            cutoff_at=schedule.sessions[5].session_close_at - timedelta(seconds=1),
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].completeness, PeriodCompleteness.COMPLETE)
+
+    def test_complete_gate_cannot_accept_range_with_wholly_missing_week(self) -> None:
+        days = tuple(date(2026, 1, day) for day in (5, 6, 7, 8, 9, 12, 13, 14, 15, 16))
+        schedule = make_schedule(days, start=date(2026, 1, 5), end=date(2026, 1, 18))
+        daily = bars_for(schedule)
+
+        with self.assertRaisesRegex(DataQualityError, "Elapsed expected period"):
+            period_bars = derive_period_bars(
+                daily[:5],
+                expected_schedule=schedule,
+                series=descriptor(BarFrequency.WEEK),
+                cutoff_at=daily[-1].available_at,
+            )
+            require_complete_period_bars(period_bars)
+
 
 class MonthlyDerivationTests(TestCase):
     def test_non_trading_month_end_uses_last_real_session(self) -> None:
@@ -252,6 +294,23 @@ class MonthlyDerivationTests(TestCase):
         self.assertTrue(result.complete)
         self.assertEqual(result.constituent_end, date(2026, 1, 30))
         self.assertEqual(result.period_end, date(2026, 1, 31))
+
+    def test_elapsed_month_with_no_observations_fails_closed(self) -> None:
+        days = tuple(
+            date(2026, month, day)
+            for month, month_days in ((1, (29, 30)), (2, (2, 3, 4, 5, 6)))
+            for day in month_days
+        )
+        schedule = make_schedule(days, start=date(2026, 1, 1), end=date(2026, 2, 28))
+        daily = bars_for(schedule)
+
+        with self.assertRaisesRegex(DataQualityError, "no daily observations"):
+            derive_period_bars(
+                daily[:2],
+                expected_schedule=schedule,
+                series=descriptor(BarFrequency.MONTH),
+                cutoff_at=daily[-1].available_at,
+            )
 
 
 class ContractValidationTests(TestCase):
