@@ -1,5 +1,6 @@
 """Range-scoped data-quality evidence and eligibility evaluation."""
 
+from quantverify.data.quality.gated_suite import QualitySuite
 from quantverify.data.quality.models import (
     CheckResult,
     CheckStatus,
@@ -20,7 +21,6 @@ from quantverify.data.quality.provenance import (
     evidence_ref_from_verified_capture,
     quality_source_from_verified_capture,
 )
-from quantverify.data.quality.suite import QualitySuite
 
 __all__ = [
     "CheckResult",
