@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,3 +36,92 @@ jobs:
         run: mypy quantverify
       - name: Test
         run: pytest --cov=quantverify --cov-report=term-missing --cov-fail-under=85
+
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Build and inspect regular wheel
+        run: |
+          python -m pip wheel --no-deps --wheel-dir dist .
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = tuple(Path("dist").glob("quantverify-*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"expected exactly one QuantVerify wheel, found: {wheels}")
+          wheel = wheels[0]
+          print(f"wheel: {wheel.name}")
+          with ZipFile(wheel) as archive:
+              contents = tuple(sorted(archive.namelist()))
+          print("wheel contents:")
+          print("\n".join(contents))
+          expected_packages = {
+              "quantverify/__init__.py",
+              "quantverify/artifacts/__init__.py",
+              "quantverify/core/__init__.py",
+              "quantverify/data/__init__.py",
+              "quantverify/data/providers/__init__.py",
+              "quantverify/engines/__init__.py",
+              "quantverify/features/__init__.py",
+              "quantverify/metrics/__init__.py",
+              "quantverify/research/__init__.py",
+              "quantverify/research/frequency/__init__.py",
+              "quantverify/strategies/__init__.py",
+          }
+          missing = expected_packages.difference(contents)
+          if missing:
+              raise SystemExit(f"wheel is missing public package boundaries: {sorted(missing)}")
+          PY
+      - name: Verify clean wheel install and imports
+        run: |
+          smoke_venv="${RUNNER_TEMP}/quantverify-wheel-smoke"
+          python -m venv "${smoke_venv}"
+          "${smoke_venv}/bin/python" -m pip install dist/*.whl
+          "${smoke_venv}/bin/python" -m pip check
+          cd "${RUNNER_TEMP}"
+          "${smoke_venv}/bin/python" -I - <<'PY'
+          from importlib import import_module
+          from pathlib import Path
+          import site
+          import sys
+
+          if sys.prefix == sys.base_prefix:
+              raise SystemExit("wheel smoke must run from a virtual environment")
+          venv_root = Path(sys.prefix).resolve()
+          site_roots = tuple(Path(path).resolve() for path in site.getsitepackages())
+          if not site_roots or any(not root.is_relative_to(venv_root) for root in site_roots):
+              raise SystemExit(f"site-packages are not isolated under the smoke venv: {site_roots}")
+
+          public_packages = (
+              "quantverify",
+              "quantverify.artifacts",
+              "quantverify.core",
+              "quantverify.data",
+              "quantverify.data.providers",
+              "quantverify.engines",
+              "quantverify.features",
+              "quantverify.metrics",
+              "quantverify.research",
+              "quantverify.research.frequency",
+              "quantverify.strategies",
+          )
+          for package_name in public_packages:
+              module = import_module(package_name)
+              if module.__file__ is None:
+                  raise SystemExit(f"{package_name} has no import path")
+              module_path = Path(module.__file__).resolve()
+              if not any(module_path.is_relative_to(root) for root in site_roots):
+                  raise SystemExit(
+                      f"{package_name} leaked outside smoke-venv site-packages: {module_path}"
+                  )
+              print(f"{package_name}: {module_path}")
+          PY
