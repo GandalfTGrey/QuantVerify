@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -231,6 +233,151 @@ class DataSnapshot(DomainModel):
         return self
 
 
+class EligibleInterval(DomainModel):
+    """One inclusive, exact-session interval proved by one A3 report replay."""
+
+    start_session: date
+    end_session: date
+    session_count: int = Field(ge=1)
+    expected_sessions_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    quality_report_id: str = Field(pattern=r"^dqr_[a-f0-9]{24}$")
+    quality_report_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    warning_finding_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> EligibleInterval:
+        if self.start_session > self.end_session:
+            raise ValueError("eligible interval start must not follow its end")
+        if len(self.warning_finding_ids) != len(set(self.warning_finding_ids)):
+            raise ValueError("warning finding identities must be unique")
+        if tuple(sorted(self.warning_finding_ids)) != self.warning_finding_ids:
+            raise ValueError("warning finding identities must be sorted")
+        if any(
+            not re.fullmatch(r"dqf_[a-f0-9]{24}", finding_id)
+            for finding_id in self.warning_finding_ids
+        ):
+            raise ValueError("warning finding identity is invalid")
+        return self
+
+
+class DatasetReleaseRef(DomainModel):
+    """Scientific reference shape; Gold authenticity requires a verified resolver."""
+
+    release_schema_version: str = Field(
+        default="dataset-release-ref-v1", pattern=r"^dataset-release-ref-v1$"
+    )
+    asset: AssetId
+    frequency: BarFrequency
+    adjustment_mode: AdjustmentMode
+    normalized_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    normalized_schema_version: str = Field(min_length=1, max_length=64)
+    normalizer_id: str = Field(min_length=1, max_length=128)
+    normalizer_version: str = Field(min_length=1, max_length=128)
+    selected_evidence_id: str = Field(pattern=r"^dqe_[a-f0-9]{24}$")
+    selected_normalized_input_id: str = Field(pattern=r"^dqi_[a-f0-9]{24}$")
+    source_resolution_policy_id: str = Field(
+        default="single-active-source", pattern=r"^single-active-source$"
+    )
+    source_resolution_policy_version: str = Field(default="1", pattern=r"^1$")
+    quality_suite_id: str = Field(min_length=1, max_length=64)
+    quality_suite_version: str = Field(min_length=1, max_length=32)
+    quality_policy_id: str = Field(min_length=1, max_length=64)
+    quality_policy_version: str = Field(min_length=1, max_length=64)
+    quality_policy_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    calendar: CalendarArtifactRef
+    schedule_id: str = Field(pattern=r"^session-schedule_[a-f0-9]{24}$")
+    schedule_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    schedule_requested_start: date
+    schedule_requested_end: date
+    schedule_session_count: int = Field(ge=1)
+    eligible_intervals: tuple[EligibleInterval, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_release_semantics(self) -> DatasetReleaseRef:
+        if self.frequency is not BarFrequency.DAY:
+            raise ValueError("DatasetReleaseRef v1 requires daily normalized data")
+        if self.adjustment_mode is not AdjustmentMode.RAW:
+            raise ValueError("DatasetReleaseRef v1 requires RAW adjustment semantics")
+        if (
+            self.quality_suite_id != "quantverify-quality-suite"
+            or self.quality_suite_version != "2"
+        ):
+            raise ValueError("DatasetReleaseRef v1 requires the accepted A3 suite")
+        if self.schedule_requested_start > self.schedule_requested_end:
+            raise ValueError("release schedule range is invalid")
+        intervals = self.eligible_intervals
+        if tuple(
+            sorted(
+                intervals,
+                key=lambda item: (
+                    item.start_session,
+                    item.end_session,
+                    item.quality_report_id,
+                ),
+            )
+        ) != intervals:
+            raise ValueError("eligible intervals must be sorted by start session")
+        if any(
+            interval.start_session < self.schedule_requested_start
+            or interval.end_session > self.schedule_requested_end
+            for interval in intervals
+        ):
+            raise ValueError("eligible interval must fit the pinned schedule range")
+        report_ids = tuple(interval.quality_report_id for interval in intervals)
+        if len(report_ids) != len(set(report_ids)):
+            raise ValueError("each eligible interval requires a distinct quality report")
+        if sum(interval.session_count for interval in intervals) > self.schedule_session_count:
+            raise ValueError("eligible interval sessions exceed the pinned schedule")
+        for previous, current in pairwise(intervals):
+            if previous.end_session >= current.start_session:
+                raise ValueError("eligible intervals must not overlap")
+        return self
+
+    @property
+    def single_asset_universe_id(self) -> str:
+        """Canonical universe identifier for this single-asset release contract."""
+
+        validated_asset = AssetId.model_validate(self.asset.model_dump(mode="python"))
+        return f"single:{validated_asset.venue}:{validated_asset.symbol}"
+
+    def structurally_supports_consumed_schedule(self, schedule: SessionSchedule) -> bool:
+        """Structurally gate a verified consumed schedule against one interval."""
+
+        self._require_immutable_sequences()
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        try:
+            consumed = SessionSchedule.model_validate(schedule.model_dump(mode="python"))
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("consumed schedule failed integrity validation") from None
+        if consumed.calendar != validated.calendar:
+            return False
+        if (
+            consumed.requested_start < validated.schedule_requested_start
+            or consumed.requested_end > validated.schedule_requested_end
+        ):
+            return False
+        first = consumed.sessions[0].session
+        last = consumed.sessions[-1].session
+        return any(
+            interval.start_session <= first <= last <= interval.end_session
+            for interval in validated.eligible_intervals
+        )
+
+    @property
+    def release_id(self) -> str:
+        self._require_immutable_sequences()
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        return stable_hash(validated, namespace="drel")
+
+    def _require_immutable_sequences(self) -> None:
+        if not isinstance(self.eligible_intervals, tuple) or any(
+            not isinstance(interval, EligibleInterval)
+            or not isinstance(interval.warning_finding_ids, tuple)
+            for interval in self.eligible_intervals
+        ):
+            raise ValueError("release sequences must remain immutable tuples")
+
+
 class StrategyVersion(DomainModel):
     strategy_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     version: str = Field(min_length=1, max_length=64)
@@ -278,7 +425,7 @@ class ExperimentConfig(DomainModel):
 
     strategy: StrategyVersion
     universe_id: str = Field(min_length=1, max_length=128)
-    dataset: DataSnapshot
+    dataset: DataSnapshot | DatasetReleaseRef
     period: TimeRange
     frequency: BarFrequency
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -290,9 +437,26 @@ class ExperimentConfig(DomainModel):
     base_currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
     random_seed: int = Field(default=0, ge=0, le=2**32 - 1)
 
+    @model_validator(mode="after")
+    def validate_dataset_frequency(self) -> ExperimentConfig:
+        if (
+            isinstance(self.dataset, DatasetReleaseRef)
+            and self.frequency is not self.dataset.frequency
+        ):
+            raise ValueError("experiment frequency must match its DatasetReleaseRef")
+        if (
+            isinstance(self.dataset, DatasetReleaseRef)
+            and self.universe_id != self.dataset.single_asset_universe_id
+        ):
+            raise ValueError(
+                "DatasetReleaseRef v1 requires its canonical single-asset universe"
+            )
+        return self
+
     @property
     def experiment_id(self) -> str:
-        return stable_hash(self, namespace="exp")
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        return stable_hash(validated, namespace="exp")
 
 
 class RuntimeContext(DomainModel):
