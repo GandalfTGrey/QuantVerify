@@ -27,17 +27,9 @@ def full_content_hash(value: Any) -> str:
 
 
 def normalized_bars_hash(bars: Sequence[NormalizedBar]) -> str:
-    """Hash complete evaluated rows, including non-finite evidence, deterministically."""
+    """Hash complete evaluated rows in their supplied scientific sequence."""
 
     canonical_bars = [_quality_bar_payload(bar) for bar in bars]
-    canonical_bars.sort(
-        key=lambda value: json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    )
     return full_content_hash(canonical_bars)
 
 

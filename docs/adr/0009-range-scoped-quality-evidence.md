@@ -92,7 +92,7 @@ normalizer_version
 row_count
 ```
 
-`content_hash` 对完整、确定性排序后的 normalized bars 做 canonical SHA-256，覆盖：
+`content_hash` 对调用方提供的完整 normalized bar **序列**做 canonical SHA-256，覆盖行顺序以及：
 
 ```text
 asset
@@ -105,6 +105,8 @@ source semantics
 ```
 
 因此，即使 raw evidence 相同、所有 quality checks 都 PASS，只要任一 normalized bar 内容或 normalizer identity 改变，`report_id` 也必须改变。
+
+行顺序是科学输入的一部分，不得在 identity 计算前排序。否则相同 rows 的有序与倒序输入会共享一个 normalized identity，却得到不同的 monotonicity 结论。`non_monotonic_sessions` finding 只覆盖发生倒序的相邻 session pair 的最小日期区间，不得用整份历史的 min/max 扩张 finding、污染不相交的后续研究区间。
 
 质量专用 canonicalization 会将非有限 Decimal/float 编码为显式 evidence token，使 NaN/Infinity 异常行也具有完整、可重复的内容 identity，而不是回退到占位 hash。
 

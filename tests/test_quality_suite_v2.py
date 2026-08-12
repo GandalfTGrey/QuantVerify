@@ -228,6 +228,18 @@ def test_normalized_bar_change_changes_report_identity_even_when_checks_pass() -
     assert first.report_id != second.report_id
 
 
+def test_normalized_input_identity_preserves_supplied_row_sequence() -> None:
+    first, second = date(2026, 1, 2), date(2026, 1, 5)
+    ordered_bars = [bar(first.isoformat()), bar(second.isoformat())]
+    reversed_bars = list(reversed(ordered_bars))
+
+    ordered = normalized_input(ordered_bars)
+    reversed_input = normalized_input(reversed_bars)
+
+    assert ordered.content_hash != reversed_input.content_hash
+    assert ordered.input_id != reversed_input.input_id
+
+
 def test_equivalent_timestamp_offsets_have_one_normalized_and_report_identity() -> None:
     session = date(2026, 1, 2)
     original_bar = bar(session.isoformat())
@@ -460,6 +472,49 @@ def test_historical_conflict_outside_requested_range_remains_visible() -> None:
         for finding in cross.findings
     )
     assert report.eligibility.status is EligibilityStatus.ELIGIBLE
+
+
+def test_historical_local_inversion_does_not_contaminate_later_range() -> None:
+    inverted_previous = date(2002, 11, 4)
+    inverted_current = date(2002, 11, 1)
+    requested_start = date(2015, 1, 2)
+    requested_end = date(2026, 1, 2)
+    sessions = (
+        inverted_previous,
+        inverted_current,
+        requested_start,
+        requested_end,
+    )
+    data = source(
+        "akshare",
+        "a",
+        "b",
+        [bar(session.isoformat()) for session in sessions],
+    )
+
+    later = evaluate(
+        [data],
+        list(sessions),
+        start=requested_start,
+        end=requested_end,
+    )
+    finding = next(
+        item
+        for item in later.findings
+        if item.finding_code == "non_monotonic_sessions"
+    )
+
+    assert finding.affected_start == inverted_current
+    assert finding.affected_end == inverted_previous
+    assert later.eligibility.status is EligibilityStatus.ELIGIBLE
+
+    historical = evaluate(
+        [data],
+        list(sessions),
+        start=inverted_current,
+        end=inverted_previous,
+    )
+    assert historical.eligibility.status is EligibilityStatus.INELIGIBLE
 
 
 def test_cross_source_warning_inside_range_is_visible_but_eligible() -> None:
@@ -769,6 +824,33 @@ def test_revision_inputs_change_report_identity_even_without_bar_differences() -
     assert not second.findings
     assert first.context.revision_input_refs != second.context.revision_input_refs
     assert first.report_id != second.report_id
+
+
+def test_revision_sequence_change_is_a_distinct_normalized_observation() -> None:
+    first, second = date(2026, 1, 2), date(2026, 1, 5)
+    ordered_bars = [bar(first.isoformat()), bar(second.isoformat())]
+    previous = source("akshare", "a", "b", ordered_bars)
+    reversed_bars = list(reversed(ordered_bars))
+    current = QualitySourceData(
+        verified_capture=previous.verified_capture,
+        evidence=previous.evidence,
+        normalized_input=normalized_input(reversed_bars),
+        bars=tuple(reversed_bars),
+    )
+    revision = RevisionPair(previous=previous, current=current)
+
+    report = evaluate(
+        [previous],
+        [first, second],
+        start=first,
+        end=second,
+        revisions=(revision,),
+    )
+
+    assert revision.previous.normalized_input != revision.current.normalized_input
+    assert report.context.revision_input_refs[0].previous_normalized_input != (
+        report.context.revision_input_refs[0].current_normalized_input
+    )
 
 
 def test_quality_input_identity_rejects_unsafe_model_copies() -> None:

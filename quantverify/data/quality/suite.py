@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from itertools import combinations
+from itertools import combinations, pairwise
 from typing import Any
 
 from quantverify.core.enums import AdjustmentMode, BarFrequency
@@ -415,17 +415,22 @@ class QualitySuite:
                         values={"count": counts[session]},
                     )
                 )
-            if sessions and sessions != sorted(sessions):
+            for previous, current in pairwise(sessions):
+                if previous <= current:
+                    continue
                 findings.append(
                     self._finding(
                         "session_integrity",
                         FindingSeverity.ERROR,
                         "non_monotonic_sessions",
-                        min(sessions),
-                        max(sessions),
-                        "source sessions are not monotonically increasing",
+                        current,
+                        previous,
+                        "adjacent source sessions are not monotonically increasing",
                         source_ids=(source.evidence.evidence_id,),
-                        values={"record_count": len(sessions)},
+                        values={
+                            "current_session": current.isoformat(),
+                            "previous_session": previous.isoformat(),
+                        },
                     )
                 )
         return self._result(
