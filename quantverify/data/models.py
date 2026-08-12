@@ -9,7 +9,8 @@ from typing import Annotated
 
 from pydantic import Field, model_validator
 
-from quantverify.core.models import AssetId, DomainModel
+from quantverify.core.enums import BarFrequency
+from quantverify.core.models import AssetId, DomainModel, SeriesDescriptor
 
 PositiveDecimal = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
@@ -46,6 +47,64 @@ class NormalizedBar(DomainModel):
             raise ValueError("session_open_at must be earlier than session_close_at")
         if self.available_at < self.session_close_at:
             raise ValueError("available_at cannot be earlier than session_close_at")
+        if self.high < self.low:
+            raise ValueError("high must be greater than or equal to low")
+        if not self.low <= self.open <= self.high:
+            raise ValueError("open must be between low and high")
+        if not self.low <= self.close <= self.high:
+            raise ValueError("close must be between low and high")
+        return self
+
+
+class DerivedPeriodBar(DomainModel):
+    """A causal weekly/monthly bar derived from an immutable source series."""
+
+    series: SeriesDescriptor
+    period_start: date
+    period_end: date
+    constituent_start: date
+    constituent_end: date
+    constituent_count: int = Field(ge=1)
+    expected_constituent_count: int = Field(ge=1)
+    constituent_schedule_id: str = Field(pattern=r"^session-schedule_[a-f0-9]{24}$")
+    expected_schedule_id: str = Field(pattern=r"^session-schedule_[a-f0-9]{24}$")
+    period_open_at: datetime
+    period_close_at: datetime
+    available_at: datetime
+    open: PositiveDecimal
+    high: PositiveDecimal
+    low: PositiveDecimal
+    close: PositiveDecimal
+    volume: NonNegativeDecimal
+    complete: bool
+
+    @model_validator(mode="after")
+    def validate_period_semantics(self) -> DerivedPeriodBar:
+        if self.series.frequency not in (BarFrequency.WEEK, BarFrequency.MONTH):
+            raise ValueError("derived period bars require weekly or monthly frequency")
+        if not (
+            self.period_start
+            <= self.constituent_start
+            <= self.constituent_end
+            <= self.period_end
+        ):
+            raise ValueError("constituent range must be contained in the period range")
+        if self.constituent_count > self.expected_constituent_count:
+            raise ValueError("constituent_count cannot exceed expected_constituent_count")
+        expected_complete = (
+            self.constituent_count == self.expected_constituent_count
+            and self.constituent_schedule_id == self.expected_schedule_id
+        )
+        if self.complete != expected_complete:
+            raise ValueError("complete must match constituent coverage")
+
+        timestamps = (self.period_open_at, self.period_close_at, self.available_at)
+        if any(timestamp.tzinfo is None for timestamp in timestamps):
+            raise ValueError("period timestamps must be timezone-aware")
+        if self.period_open_at >= self.period_close_at:
+            raise ValueError("period_open_at must be earlier than period_close_at")
+        if self.available_at < self.period_close_at:
+            raise ValueError("available_at cannot be earlier than period_close_at")
         if self.high < self.low:
             raise ValueError("high must be greater than or equal to low")
         if not self.low <= self.open <= self.high:

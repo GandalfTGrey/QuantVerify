@@ -15,8 +15,15 @@ class AssetClass(StrEnum):
 
 class BarFrequency(StrEnum):
     DAY = "1d"
+    WEEK = "1w"
+    MONTH = "1mo"
     HOUR = "1h"
     MINUTE = "1m"
+
+
+class SeriesSourceKind(StrEnum):
+    FIXTURE = "fixture"
+    DATASET_RELEASE = "dataset_release"
 
 
 class DecisionTime(StrEnum):

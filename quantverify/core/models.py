@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,6 +15,7 @@ from quantverify.core.enums import (
     BarFrequency,
     DecisionTime,
     ExecutionPrice,
+    SeriesSourceKind,
 )
 from quantverify.core.identity import stable_hash
 
@@ -45,6 +47,69 @@ class TimeRange(DomainModel):
         if self.start >= self.end:
             raise ValueError("start must be earlier than end")
         return self
+
+
+class TradingSession(DomainModel):
+    """One actual exchange session with executable open and close timestamps."""
+
+    session: date
+    session_open_at: datetime
+    session_close_at: datetime
+
+    @model_validator(mode="after")
+    def validate_times(self) -> TradingSession:
+        if self.session_open_at.tzinfo is None or self.session_close_at.tzinfo is None:
+            raise ValueError("session timestamps must be timezone-aware")
+        if self.session_open_at >= self.session_close_at:
+            raise ValueError("session_open_at must be earlier than session_close_at")
+        return self
+
+
+class SessionSchedule(DomainModel):
+    """Exact expected sessions for an input range, not an inferred row sequence."""
+
+    calendar_id: str = Field(min_length=1, max_length=128)
+    calendar_version: str = Field(min_length=1, max_length=64)
+    timezone: str = Field(min_length=1, max_length=64)
+    sessions: tuple[TradingSession, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> SessionSchedule:
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown IANA timezone: {self.timezone}") from exc
+
+        for previous, current in zip(self.sessions, self.sessions[1:], strict=False):
+            if previous.session >= current.session:
+                raise ValueError("sessions must be strictly ordered by session date")
+            if previous.session_close_at >= current.session_open_at:
+                raise ValueError("sessions must not overlap or run backwards")
+        return self
+
+    @property
+    def schedule_id(self) -> str:
+        return stable_hash(self, namespace="session-schedule")
+
+
+class SeriesDescriptor(DomainModel):
+    """Versioned market-series semantics and immutable upstream lineage."""
+
+    asset: AssetId
+    frequency: BarFrequency
+    adjustment_mode: AdjustmentMode
+    source_kind: SeriesSourceKind
+    source_id: str = Field(min_length=1, max_length=128)
+    source_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_schema_version: str = Field(min_length=1, max_length=32)
+    producer_id: str = Field(min_length=1, max_length=128)
+    producer_version: str = Field(min_length=1, max_length=64)
+    calendar_id: str = Field(min_length=1, max_length=128)
+    calendar_version: str = Field(min_length=1, max_length=64)
+
+    @property
+    def series_id(self) -> str:
+        return stable_hash(self, namespace="market-series")
 
 
 class DataSnapshot(DomainModel):

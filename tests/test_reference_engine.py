@@ -5,13 +5,17 @@ from quantverify.core.exceptions import DataQualityError
 from quantverify.engines.reference import LongFlatReferenceEngine, TradeSide
 from quantverify.metrics import maximum_drawdown, total_return
 from quantverify.strategies import price_above_sma_targets
-from tests.test_trend_strategy import load_bars
+from tests.test_trend_strategy import load_bars, schedule_for
 
 
 class ReferenceEngineGoldenTests(TestCase):
     def setUp(self) -> None:
         self.bars = load_bars()[:7]
-        self.targets = price_above_sma_targets(self.bars, window=3)
+        self.targets = price_above_sma_targets(
+            self.bars,
+            window=3,
+            schedule=schedule_for(self.bars),
+        )
         self.engine = LongFlatReferenceEngine()
 
     def test_zero_cost_trade_timing_and_equity_are_hand_verifiable(self) -> None:
