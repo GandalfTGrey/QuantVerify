@@ -18,7 +18,7 @@ from quantverify.core.enums import (
     SeriesSourceKind,
     SessionLabelPolicy,
 )
-from quantverify.core.identity import stable_hash
+from quantverify.core.identity import full_hash, stable_hash
 
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
 PositionWeight = Annotated[Decimal, Field(allow_inf_nan=False)]
@@ -93,6 +93,30 @@ class SessionSchedule(DomainModel):
     requested_end: date
     calendar: CalendarArtifactRef
     sessions: tuple[TradingSession, ...] = Field(min_length=1)
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        requested_start: date,
+        requested_end: date,
+        calendar: CalendarArtifactRef,
+        sessions: tuple[TradingSession, ...],
+    ) -> SessionSchedule:
+        payload = cls._content_payload(
+            requested_start=requested_start,
+            requested_end=requested_end,
+            calendar=calendar,
+            sessions=sessions,
+        )
+        return cls(
+            requested_start=requested_start,
+            requested_end=requested_end,
+            calendar=calendar,
+            sessions=sessions,
+            content_hash=full_hash(payload),
+        )
 
     @model_validator(mode="after")
     def validate_schedule(self) -> SessionSchedule:
@@ -118,27 +142,46 @@ class SessionSchedule(DomainModel):
                 raise ValueError("sessions must be strictly ordered by session date")
             if previous.session_close_at >= current.session_open_at:
                 raise ValueError("sessions must not overlap or run backwards")
+        expected_hash = full_hash(
+            self._content_payload(
+                requested_start=self.requested_start,
+                requested_end=self.requested_end,
+                calendar=self.calendar,
+                sessions=self.sessions,
+            )
+        )
+        if self.content_hash != expected_hash:
+            raise ValueError("session schedule content hash does not match its sessions")
         return self
 
-    @property
-    def schedule_id(self) -> str:
-        if not isinstance(self.sessions, tuple):
-            raise ValueError("sessions must remain an immutable tuple")
-        validated = type(self).model_validate(self.model_dump(mode="python"))
-        payload = {
-            "requested_start": validated.requested_start,
-            "requested_end": validated.requested_end,
-            "calendar": validated.calendar,
+    @staticmethod
+    def _content_payload(
+        *,
+        requested_start: date,
+        requested_end: date,
+        calendar: CalendarArtifactRef,
+        sessions: tuple[TradingSession, ...],
+    ) -> dict[str, Any]:
+        return {
+            "requested_start": requested_start,
+            "requested_end": requested_end,
+            "calendar": calendar,
             "sessions": tuple(
                 {
                     "session": item.session,
                     "session_open_at": item.session_open_at.astimezone(UTC),
                     "session_close_at": item.session_close_at.astimezone(UTC),
                 }
-                for item in validated.sessions
+                for item in sessions
             ),
         }
-        return stable_hash(payload, namespace="session-schedule")
+
+    @property
+    def schedule_id(self) -> str:
+        if not isinstance(self.sessions, tuple):
+            raise ValueError("sessions must remain an immutable tuple")
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        return stable_hash(validated.content_hash, namespace="session-schedule")
 
 
 class SeriesDescriptor(DomainModel):

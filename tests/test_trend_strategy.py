@@ -45,10 +45,16 @@ def load_schedule(*, session_count: int | None = None) -> SessionSchedule:
             encoding="utf-8"
         )
     )
-    if session_count is not None:
-        raw["sessions"] = raw["sessions"][:session_count]
-        raw["requested_end"] = raw["sessions"][-1]["session"]
-    return SessionSchedule.model_validate(raw)
+    stored = SessionSchedule.model_validate(raw)
+    if session_count is None:
+        return stored
+    selected = stored.sessions[:session_count]
+    return SessionSchedule.create(
+        requested_start=stored.requested_start,
+        requested_end=selected[-1].session,
+        calendar=stored.calendar,
+        sessions=selected,
+    )
 
 
 def replace_bar(bar: NormalizedBar, **updates: object) -> NormalizedBar:
@@ -72,6 +78,12 @@ class MovingAverageTests(TestCase):
 
 
 class TrendGoldenTests(TestCase):
+    def test_calendar_fixture_has_pinned_schedule_identity(self) -> None:
+        self.assertEqual(
+            load_schedule().schedule_id,
+            "session-schedule_ec8a813682d1ab91fc0b171b",
+        )
+
     def test_sma_targets_match_hand_verified_fixture(self) -> None:
         expected = yaml.safe_load(
             (FIXTURES / "sma3_expected_targets.yaml").read_text(encoding="utf-8")
@@ -135,9 +147,12 @@ class TrendGoldenTests(TestCase):
         trusted = load_schedule()
         calendar_values = trusted.calendar.model_dump(mode="python")
         calendar_values["session_label_policy"] = SessionLabelPolicy.CALENDAR_DEFINED
-        schedule_values = trusted.model_dump(mode="python")
-        schedule_values["calendar"] = calendar_values
-        unsupported = SessionSchedule.model_validate(schedule_values)
+        unsupported = SessionSchedule.create(
+            requested_start=trusted.requested_start,
+            requested_end=trusted.requested_end,
+            calendar=trusted.calendar.model_validate(calendar_values),
+            sessions=trusted.sessions,
+        )
         with self.assertRaisesRegex(DataQualityError, "close-local-date"):
             price_above_sma_targets(bars, window=3, schedule=unsupported)
 

@@ -10,7 +10,7 @@ from typing import Annotated
 
 from pydantic import Field, model_validator
 
-from quantverify.core.enums import BarFrequency
+from quantverify.core.enums import BarFrequency, PeriodCompleteness
 from quantverify.core.identity import stable_hash
 from quantverify.core.models import AssetId, DomainModel, SeriesDescriptor, SessionSchedule
 
@@ -92,12 +92,8 @@ class DerivedPeriodBar(DomainModel):
 
         actual_sessions = self.constituent_schedule.sessions
         expected_sessions = self.expected_schedule.sessions
-        expected_by_label = {item.session: item for item in expected_sessions}
-        matching_expected = tuple(
-            expected_by_label.get(item.session) for item in actual_sessions
-        )
-        if matching_expected != actual_sessions:
-            raise ValueError("constituent sessions must be an exact subset of expected sessions")
+        if actual_sessions != expected_sessions[: len(actual_sessions)]:
+            raise ValueError("constituent sessions must be an exact prefix of expected sessions")
         if len(self.constituent_available_at) != len(actual_sessions):
             raise ValueError("constituent availability count must match constituent sessions")
         if self.cutoff_at.tzinfo is None or any(
@@ -165,25 +161,39 @@ class DerivedPeriodBar(DomainModel):
 
     @property
     def complete(self) -> bool:
-        return self.constituent_schedule.sessions == self.expected_schedule.sessions
+        return self.completeness is PeriodCompleteness.COMPLETE
+
+    @property
+    def completeness(self) -> PeriodCompleteness:
+        actual_sessions = self.constituent_schedule.sessions
+        expected_sessions = self.expected_schedule.sessions
+        if actual_sessions == expected_sessions:
+            return PeriodCompleteness.COMPLETE
+        first_omitted = expected_sessions[len(actual_sessions)]
+        if self.cutoff_at < first_omitted.session_close_at:
+            return PeriodCompleteness.PARTIAL_CUTOFF
+        return PeriodCompleteness.INCOMPLETE_MISSING_DATA
 
     @property
     def period_bar_id(self) -> str:
+        if not isinstance(self.constituent_available_at, tuple):
+            raise ValueError("constituent availability must remain an immutable tuple")
+        validated = type(self).model_validate(self.model_dump(mode="python"))
         payload = {
-            "series": self.series,
-            "period_start": self.period_start,
-            "period_end": self.period_end,
-            "constituent_schedule_id": self.constituent_schedule.schedule_id,
-            "expected_schedule_id": self.expected_schedule.schedule_id,
+            "series": validated.series,
+            "period_start": validated.period_start,
+            "period_end": validated.period_end,
+            "constituent_schedule_id": validated.constituent_schedule.schedule_id,
+            "expected_schedule_id": validated.expected_schedule.schedule_id,
             "constituent_available_at": tuple(
-                timestamp.astimezone(UTC) for timestamp in self.constituent_available_at
+                timestamp.astimezone(UTC) for timestamp in validated.constituent_available_at
             ),
-            "cutoff_at": self.cutoff_at.astimezone(UTC),
-            "open": self.open,
-            "high": self.high,
-            "low": self.low,
-            "close": self.close,
-            "volume": self.volume,
+            "cutoff_at": validated.cutoff_at.astimezone(UTC),
+            "open": validated.open,
+            "high": validated.high,
+            "low": validated.low,
+            "close": validated.close,
+            "volume": validated.volume,
         }
         return stable_hash(payload, namespace="period-bar")
 

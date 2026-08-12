@@ -8,6 +8,7 @@ from quantverify.core.enums import (
     AdjustmentMode,
     AssetClass,
     BarFrequency,
+    PeriodCompleteness,
     SeriesSourceKind,
     SessionLabelPolicy,
 )
@@ -58,7 +59,7 @@ def schedule(
     requested_start: date = date(2026, 1, 5),
     requested_end: date = date(2026, 1, 11),
 ) -> SessionSchedule:
-    return SessionSchedule(
+    return SessionSchedule.create(
         requested_start=requested_start,
         requested_end=requested_end,
         calendar=calendar or calendar_ref(),
@@ -123,7 +124,7 @@ class SessionScheduleTests(TestCase):
     def test_schedule_identity_has_a_fixed_golden_value(self) -> None:
         self.assertEqual(
             schedule().schedule_id,
-            "session-schedule_f05dfbbc0acc6bfb5acbd68b",
+            "session-schedule_d2e3b87a7e439bc1e99aaefe",
         )
 
     def test_rejects_duplicate_or_out_of_order_sessions(self) -> None:
@@ -144,7 +145,7 @@ class SessionScheduleTests(TestCase):
             schedule((january_label_february_times,))
 
     def test_dst_and_half_day_sessions_use_exchange_local_close_labels(self) -> None:
-        dst_schedule = SessionSchedule(
+        dst_schedule = SessionSchedule.create(
             requested_start=date(2026, 3, 6),
             requested_end=date(2026, 3, 9),
             calendar=calendar_ref(),
@@ -161,7 +162,7 @@ class SessionScheduleTests(TestCase):
                 ),
             ),
         )
-        half_day = SessionSchedule(
+        half_day = SessionSchedule.create(
             requested_start=date(2026, 11, 27),
             requested_end=date(2026, 11, 27),
             calendar=calendar_ref(),
@@ -180,6 +181,13 @@ class SessionScheduleTests(TestCase):
         unsafe_schedule = schedule().model_copy(update={"sessions": []})
         with self.assertRaisesRegex(ValueError, "immutable tuple"):
             _ = unsafe_schedule.schedule_id
+
+    def test_schedule_content_hash_rejects_tampered_sessions(self) -> None:
+        trusted = schedule()
+        tampered = trusted.model_dump(mode="python")
+        tampered["sessions"] = tampered["sessions"][:-1]
+        with self.assertRaisesRegex(ValidationError, "content hash"):
+            SessionSchedule.model_validate(tampered)
 
 
 class SeriesDescriptorTests(TestCase):
@@ -215,6 +223,7 @@ class DerivedPeriodBarTests(TestCase):
             cutoff_at=datetime(2026, 1, 8, 22, 0, tzinfo=UTC),
         )
         self.assertFalse(bar.complete)
+        self.assertEqual(bar.completeness, PeriodCompleteness.PARTIAL_CUTOFF)
         self.assertEqual(bar.constituent_count, 4)
         self.assertEqual(bar.expected_constituent_count, 5)
 
@@ -238,8 +247,55 @@ class DerivedPeriodBarTests(TestCase):
         with self.assertRaisesRegex(ValidationError, "Monday through Sunday"):
             period_bar(period_start=date(2026, 1, 6))
         outsider = schedule((*week_sessions()[:-1], session(10)))
-        with self.assertRaisesRegex(ValidationError, "exact subset"):
+        with self.assertRaisesRegex(ValidationError, "exact prefix"):
             period_bar(constituent_schedule=outsider)
+
+    def test_missing_data_is_not_a_normal_cutoff_partial(self) -> None:
+        actual = schedule(week_sessions()[:-1])
+        bar = period_bar(
+            constituent_schedule=actual,
+            constituent_available_at=tuple(
+                item.session_close_at + timedelta(minutes=5) for item in actual.sessions
+            ),
+            cutoff_at=datetime(2026, 1, 9, 22, 0, tzinfo=UTC),
+        )
+        self.assertEqual(bar.completeness, PeriodCompleteness.INCOMPLETE_MISSING_DATA)
+
+    def test_period_identity_revalidates_unsafe_model_copy(self) -> None:
+        bar = period_bar()
+        invalid_values = (
+            {"open": Decimal("-1")},
+            {"period_start": date(2026, 1, 6)},
+            {"cutoff_at": datetime(2026, 1, 9, 22, 0)},
+            {
+                "series": bar.series.model_copy(
+                    update={"source_content_hash": "not-a-hash"}
+                )
+            },
+        )
+        for updates in invalid_values:
+            with self.subTest(updates=updates), self.assertRaises(ValidationError):
+                _ = bar.model_copy(update=updates).period_bar_id
+
+        mutable_availability = list(bar.constituent_available_at)
+        mutable = bar.model_copy(update={"constituent_available_at": mutable_availability})
+        with self.assertRaisesRegex(ValueError, "immutable tuple"):
+            _ = mutable.period_bar_id
+
+    def test_period_identity_has_fixed_golden_and_normalizes_offsets(self) -> None:
+        bar = period_bar()
+        shanghai = timezone(timedelta(hours=8))
+        offset_bar = DerivedPeriodBar.model_validate(
+            {
+                **bar.model_dump(mode="python"),
+                "constituent_available_at": tuple(
+                    value.astimezone(shanghai) for value in bar.constituent_available_at
+                ),
+                "cutoff_at": bar.cutoff_at.astimezone(shanghai),
+            }
+        )
+        self.assertEqual(bar.period_bar_id, offset_bar.period_bar_id)
+        self.assertEqual(bar.period_bar_id, "period-bar_45decbc1107a081da3b973e1")
 
     def test_monthly_period_uses_natural_calendar_boundary(self) -> None:
         january = schedule(

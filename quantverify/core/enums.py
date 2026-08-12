@@ -32,6 +32,12 @@ class SessionLabelPolicy(StrEnum):
     CALENDAR_DEFINED = "calendar_defined"
 
 
+class PeriodCompleteness(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL_CUTOFF = "partial_cutoff"
+    INCOMPLETE_MISSING_DATA = "incomplete_missing_data"
+
+
 class DecisionTime(StrEnum):
     BAR_OPEN = "bar_open"
     BAR_CLOSE = "bar_close"
