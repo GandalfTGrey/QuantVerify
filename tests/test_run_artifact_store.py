@@ -1,7 +1,7 @@
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -112,6 +112,44 @@ class RunArtifactStoreTests(TestCase):
         self.assertEqual(first.artifact_path, second.artifact_path)
         self.assertNotEqual(first.manifest_path, second.manifest_path)
         self.assertNotEqual(first.manifest_hash, second.manifest_hash)
+
+    def test_equivalent_created_at_instants_have_one_manifest_identity(self) -> None:
+        offset = timezone(timedelta(hours=-4))
+        equivalent = CREATED_AT.astimezone(offset)
+        self.assertEqual(CREATED_AT, equivalent)
+
+        with TemporaryDirectory() as directory:
+            store = RunArtifactStore(Path(directory))
+            utc_stored = self._write(store, created_at=CREATED_AT)
+            offset_stored = self._write(store, created_at=equivalent)
+            utc_verified = store.inspect_reference_result(utc_stored.manifest_path)
+            offset_verified = store.inspect_reference_result(offset_stored.manifest_path)
+
+        self.assertEqual(utc_stored, offset_stored)
+        self.assertEqual(utc_stored.manifest_hash, offset_stored.manifest_hash)
+        self.assertEqual(utc_stored.manifest_path, offset_stored.manifest_path)
+        self.assertEqual(utc_stored.manifest.created_at.tzinfo, UTC)
+        self.assertEqual(utc_verified, offset_verified)
+
+    def test_loader_accepts_legacy_canonical_non_utc_manifest(self) -> None:
+        offset = timezone(timedelta(hours=-4))
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = RunArtifactStore(root)
+            stored = self._write(store)
+            legacy_manifest = RunArtifactManifest.model_validate(
+                {
+                    **stored.manifest.model_dump(mode="python"),
+                    "created_at": CREATED_AT.astimezone(offset),
+                }
+            )
+            legacy_relative = self._write_canonical_manifest(root, legacy_manifest)
+
+            verified = store.inspect_reference_result(legacy_relative)
+
+        self.assertEqual(verified.reference_result, build_result())
+        self.assertEqual(verified.manifest.created_at.utcoffset(), timedelta(hours=-4))
+        self.assertEqual(verified.manifest_path, legacy_relative.as_posix())
 
     def test_repeated_exact_write_is_idempotent(self) -> None:
         with TemporaryDirectory() as directory:

@@ -128,6 +128,7 @@ class RunArtifactStore:
         observation_created_at = created_at or datetime.now(UTC)
         if observation_created_at.tzinfo is None:
             raise ReproducibilityError("run artifact created_at must be timezone-aware")
+        observation_created_at = observation_created_at.astimezone(UTC)
         validated_result = ReferenceResult.model_validate(result.model_dump(mode="python"))
         validated_runtime = RuntimeContext.model_validate(runtime.model_dump(mode="python"))
         validated_engine = EngineVersion.model_validate(engine.model_dump(mode="python"))
