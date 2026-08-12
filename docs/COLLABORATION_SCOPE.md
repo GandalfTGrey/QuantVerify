@@ -44,10 +44,10 @@ Contributor-Role: <S-5.6|Argus|Q-Lead|CA-Lead|Dev-Lead|QA-Lead>
 
 | ID | 共享契约风险 | 冻结结果 |
 |---|---|---|
-| CORE-01 | `BarFrequency` 只有日/小时/分钟，但研究配置已经出现周/月 | 定义 daily input 与 derived weekly/monthly frequency；禁止各模块自造字符串/枚举 |
-| CORE-02 | `NormalizedBar` 不携带 frequency、adjustment、lineage | 定义 `SeriesDescriptor` / `DerivedPeriodBar` 等价 envelope，包含 frequency、adjustment、release lineage、constituent range、`available_at`、`complete` |
+| CORE-01 | 已完成：周/月频率契约 | `BarFrequency` 已区分 daily input 与 derived weekly/monthly frequency；各模块不得自造字符串/枚举 |
+| CORE-02 | 已完成（release bridge 待 CORE-03）：period series envelope | `SeriesDescriptor` / `DerivedPeriodBar` 已绑定 frequency、adjustment、source lineage、constituent schedule、`available_at` 与 completeness |
 | CORE-03 | `DataSnapshot` 未绑定 normalizer、quality policy/report、eligible range | 定义不可变 `DatasetReleaseRef`，并使 experiment identity 对质量政策和 release identity 敏感 |
-| CORE-04 | reference strategy 以“下一行”代替“下一真实交易 session” | 定义显式 session schedule/完整性证明；缺 bar 不得静默推迟成交 |
+| CORE-04 | 已完成契约层：显式 session schedule | reference strategy 使用显式 schedule 的下一 session open；生产权威性仍由 A4 pinned calendar/release 证明 |
 | CORE-05 | `core.ports` 与 ReferenceEngine、RunArtifactStore 的真实签名漂移 | 冻结 application command DTO、handler ports 与 composition boundary |
 | CORE-06 | artifact v1 未绑定 normalized input/quality report/metrics | 在不破坏 v1 verified read 的前提下决定 artifact v2 lineage 与 metrics schema |
 
@@ -62,7 +62,7 @@ Lane A — Data trust
 
 Lane B — Research correctness
 QD-01 #5 conflict evidence (independent now)
-CORE-01..04 -> QF-01 causal week/month bars
+CORE-01/02/04 -> QF-01 causal week/month bars
     -> QF-02 S4 -> S2 -> S3 -> S1 -> S5 signal-only
 
 Lane C — Platform
@@ -86,7 +86,7 @@ Independent QA consumes merged contracts and never becomes a production dependen
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Argus / S-5.6；A3 另需 Q-Lead 科学复核 |
-| Branch / Status | `argus/*`；#18 -> #19 -> #20 与 #16，WIP 已满 |
+| Branch / Status | `argus/*`；#18 -> #19 -> #20 与 #16 均为 Blocked / Draft review，WIP 已满 |
 | Input contract | immutable capture bytes、request identity、manifest、normalized input reference、显式 quality policy |
 | Output contract | verified capture；内容寻址且区间级的 quality report；可重复的 eligibility 决定 |
 | 独占文件 | `quantverify/data/store.py`、`quantverify/data/quality/**` 及对应测试、ADR-0007/0009 |
@@ -130,7 +130,7 @@ Argus 在上述队列清空前不再领取新实现；可以回答 review 或准
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Q-Lead / S-5.6 + QA-Lead |
-| Branch / Status | `quant/causal-period-bars-v1`；Issue #22，Ready after CORE-01/02/04 |
+| Branch / Status | `q-lead/causal-frequency-v1`；Issue #22，Done，PR #37 |
 | Input contract | ordered daily bars、显式 session calendar/schedule、cutoff、`SeriesDescriptor` |
 | Output contract | derived period bars，携带 constituent start/end、`available_at`、`complete` 和 lineage |
 | 独占文件 | 新建 `quantverify/research/frequency/**`、`tests/research/frequency/**` |
@@ -143,7 +143,7 @@ Argus 在上述队列清空前不再领取新实现；可以回答 review 或准
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Q-Lead / S-5.6 + QA-Lead |
-| Branch / Status | `quant/strategy-reference-pack-v1`；Issue #30，Blocked on QF-01 |
+| Branch / Status | Q-Lead 每策略个人分支；Issue #30，Done，PR #39/#41/#43/#45/#49 |
 | Input contract | verified fixture bundle、完成的 derived period bars、显式 eligible session schedule、reference engine |
 | Output contract | versioned feature/strategy signals、手算 golden、causality/metamorphic evidence |
 | 独占文件 | `quantverify/features/**`、`quantverify/strategies/**`、`tests/strategies/**` |
@@ -173,7 +173,7 @@ Argus 对 CA-01 是 correctness reviewer，不再同时做 Owner，以消除 A3/
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Dev-Lead 或 Q-Lead / Q-Lead + S-5.6（作者之外） |
-| Branch / Status | `dev/metrics-v1`；Issue #23，Ready now |
+| Branch / Status | `dev-lead/metrics-v1`；Issue #23，Done，PR #38 |
 | Input contract | versioned equity/return observations、显式 calendar/annualization/ddof/risk-free policy |
 | Output contract | versioned `MetricSet`：Total、CAGR、Vol、Sharpe、MaxDD，失败状态显式 |
 | 独占文件 | 新建 `quantverify/metrics/**`、`tests/metrics/**`、指标口径文档 |
@@ -186,7 +186,7 @@ Argus 对 CA-01 是 correctness reviewer，不再同时做 Owner，以消除 A3/
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Dev-Lead / S-5.6 + QA-Lead |
-| Branch / Status | `dev/artifact-inspection-v1`；Issue #24，Ready now |
+| Branch / Status | `dev-lead/artifact-inspection-v1`；Issue #24，Done，PR #40 |
 | Input contract | store root、显式相对 manifest path；不接受 implicit latest |
 | Output contract | `VerifiedRunArtifact`：manifest、manifest hash、reference result、canonical paths |
 | 独占文件 | `quantverify/artifacts/**` 及 artifact 专属测试 |
@@ -199,11 +199,11 @@ Argus 对 CA-01 是 correctness reviewer，不再同时做 Owner，以消除 A3/
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | 第二位 Dev-Lead / S-5.6 |
-| Branch / Status | `dev/ci-security-posture-v1`；Issue #26，audit Ready now，implementation 需窄 PR |
+| Branch / Status | Dev-Lead 串行个人分支；Issue #26，audit 与 SW02-01..05 Done，SW02-06 In progress |
 | Input contract | 当前 workflows、pyproject、安装与测试命令 |
 | Output contract | 最小权限、timeout/concurrency、wheel/install smoke、离线测试和可追踪依赖更新 |
 | 独占文件 | `.github/workflows/**`、`.github/dependabot.yml`、独立 CI/security 文档 |
-| Acceptance | Python 3.11/3.12；不读取/输出本地 `.env`；unit tests 无真实行情网络；Mac M1 另有 smoke 记录 |
+| Acceptance | Python 3.11/3.12/3.13；regular wheel clean-install；不读取/输出本地 `.env`；安装 market-data extras 后网络禁用测试；Mac arm64 自动化 smoke |
 | Forbidden | 暂不修改 `[project.scripts]`、不把不稳定外部扫描直接设 required gate、不把 CI 当 CaptureStore secret guard 的替代品 |
 | Merge order | 审计可并行；每个工具链改变单独 PR |
 
@@ -212,7 +212,7 @@ Argus 对 CA-01 是 correctness reviewer，不再同时做 Owner，以消除 A3/
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Dev-Lead / Argus + S-5.6 |
-| Branch / Status | `dev/fixture-bundle-v1`；Issue #28，design now，code blocked on A3 normalized hash contract |
+| Branch / Status | `dev/fixture-bundle-v1`；Issue #27，design now，code blocked on A3 normalized hash contract |
 | Input contract | 显式注册的 fixture ID/manifest |
 | Output contract | immutable `LoadedFixture`：asset/frequency/calendar/adjustment、snapshot、ordered bars、content hash/schema、expected-session identity |
 | 独占文件 | 新建 `quantverify/fixtures/**`、fixture 资源和测试 |
@@ -238,7 +238,7 @@ Argus 对 CA-01 是 correctness reviewer，不再同时做 Owner，以消除 A3/
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | QA-Lead / S-5.6；领域项由 Argus 或 Q-Lead 复核 |
-| Branch / Status | `qa/contract-golden-audit-v1`；Issue #27，可在每个上游契约合并后增量开始 |
+| Branch / Status | `qa/contract-golden-audit-v1`；Issue #28，可在每个上游契约合并后增量开始 |
 | Input contract | 仅公开 API、已接受 ADR、明确 fixture |
 | Output contract | 可独立运行的 contract/golden/metamorphic suite 与审计矩阵 |
 | 独占文件 | `tests/contracts/**`、`tests/golden/**`、QA 报告 |
@@ -285,7 +285,7 @@ DuckDB Research Catalog 延至 M3。在 DatasetRelease、quality-to-run lineage�
 ## 9. Definition of Done
 
 1. Issue 验收条件逐项满足；
-2. Ruff、strict mypy、Python 3.11/3.12、全量测试通过；
+2. Ruff、strict mypy、Python 3.11/3.12/3.13、全量测试通过；
 3. 总覆盖率不低于 85%，本次高风险模块目标不低于 90%；
 4. 测试离线、确定性，包含成功与失败路径；
 5. 相关身份、篡改、重放、路径、时区和 secret 边界均有测试；

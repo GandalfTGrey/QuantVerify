@@ -20,24 +20,27 @@
 | 架构 v0.2 | Done | 补齐 causal/PIT/portfolio/identity/governance |
 | 架构审查 | Done | 严重度、风险和处置已记录 |
 | Python package baseline | Done | `pyproject.toml`、package、gitignore |
-| Core domain contracts | Done | 时间、数据、成本、实验、运行、目标仓位 |
+| Core domain contracts | Done / Partial extension | 基础领域模型完成；market series、交易日历与因果周期 bar 已冻结，DatasetRelease/application/artifact v2 仍待完成 |
 | Stable identity | Done | canonical SHA-256 experiment/run identity |
 | Core unit tests | Done | 身份稳定性、时区、split、因果约束 |
 | Versioned config loader | Done | YAML schema version、strict validation |
-| CI baseline | Done | Python 3.11/3.12、Ruff、mypy、pytest、coverage |
+| CI baseline | Done / Hardening | Python 3.11/3.12/3.13、Ruff、mypy、pytest、coverage、SHA-pinned actions、并发/超时、regular-wheel、离线 extras 与 Mac arm64 已完成；仅依赖治理 SW02-06 继续按 #26 推进 |
 | 研究守则整合 | Done | Data Integrity、Research Protocol、Strategy Universe |
 | Initial ADR set | Done | precedence、timing、identity、dual-source validation |
 | Golden signal fixture | Done | 手算 SMA3、warm-up、T+1 target、causality regression |
 | Reference engine v1 | Done | long/flat、next-open、成本与逐期 equity golden tests |
 | RawCapture boundary | Done | 一次抓取、深度不可变、离线 normalization |
 | CaptureStore A2 | Done / Audit | content-addressed capture/manifest；Argus Issue #11 独立审计 |
-| CaptureStore hardening | In review | Argus #18 -> #19 -> #20；secret guard、atomic publish、verified replay |
-| Quality Suite v2 | Draft / Review | Argus #16；接入 VerifiedCapture 后再做最终科学审查 |
+| CaptureStore hardening | Blocked / Draft review | Argus #18 仍有 P0/P1；#19 -> #20 必须在修复后的当前 main 逐层 restack |
+| Quality Suite v2 | Blocked / Draft review | Argus #16；等待 #18 -> #19 -> #20，并修复双源 evidence 独立性后再做最终科学审查 |
 | Immutable artifact v1 | Done | canonical JSON result/manifest、hash、verified load；ADR-0008 |
-| Metrics v1 | Ready | Total/CAGR/Vol/Sharpe/MaxDD；可由独立 Dev/Q-Lead 实现 |
+| Verified artifact inspection | Done | 显式 manifest path、canonical path/hash/content 验证、legacy read 与并发回归；PR #40 |
+| Metrics v1 | Done | Total/CAGR/Vol/Sharpe/MaxDD、显式 undefined/failure、输入一致性与破产吸收态；PR #38 |
+| Causal weekly/monthly bars | Done | 显式 verified-schedule boundary、完整/partial/missing 三态、截断不变；PR #37 |
+| Fixture strategy pack | Done | S4/S2/S3/S1 与 S5 signal-only 已合并（PR #39/#41/#43/#45/#49）；S5 不宣称多资产执行 |
 | Experiment service/CLI | Blocked / Design | Issue #17；fixture-only，等待 application/artifact/fixture 契约冻结 |
 | 真实市场数据准入 | Blocked | AkShare 美股历史缺口；Tushare 无美股权限；尚无 Gold dataset |
-| S-5.6 foundation integration | Done | PR #12 与 #15 已合并；当前聚焦关键路径 review 和共享契约 |
+| S-5.6 integration train | In progress | foundation、QF-01、Metrics、artifact inspection、QF-02 与 SW02-01..05 已合并；当前聚焦 DATA-01 与 SW02-06 |
 
 ## 3. Milestone 0 — Foundation
 
@@ -81,7 +84,7 @@
 | M1-03 | SMA crossover Strategy | M1-02 | signal 与人工 fixture 一致 | 0.5 |
 | M1-04 | Long/flat allocator | M1-03 | target/effective timestamps 正确 | 0.5 |
 | M1-05 | Reference engine | M1-04 | 逐期现金、仓位、收益、成本可对账 | 2.0 |
-| M1-06 | Metrics v1 | M1-05 | Total/CAGR/Vol/Sharpe/MaxDD 定义与测试 | 1.5 |
+| M1-06 | Metrics v1 | M1-05 | Total/CAGR/Vol/Sharpe/MaxDD 定义与测试；已完成 | 1.5 |
 | M1-07 | Artifact writer | M1-05 | v1 canonical JSON result + manifest + hashes；已完成 | 1.0 |
 | M1-08 | Experiment service/CLI | M1-01..07 | fixture-only 单命令运行并输出 experiment/run ID；真实数据等 A4 | 1.0 |
 | M1-09 | VectorBT adapter spike | M1-05 | golden fixture 与 reference engine 对账 | 1.5 |
@@ -203,7 +206,7 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 - 每个 bug 先增加回归 fixture；
 - 核心财务计算使用 golden tests；
 - 依赖升级单独 PR，并附结果差异；
-- CI 固定 Python 3.11/3.12 matrix；
+- CI 固定 Python 3.11/3.12/3.13 matrix；
 - 目标：core >=90%，整体覆盖率仅作辅助指标。
 
 ### 架构治理
@@ -239,7 +242,7 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 5. `A4 DatasetRelease + range-scoped eligibility`（依赖 #16）；
 6. `#17 M1-08 fixture-only experiment service / CLI`（真实数据入口另依赖 A4）。
 
-可并行的非关键路径工作：#5 QQQ/DIA 冲突证据、#23 Metrics v1、#24 verified artifact inspection、#26 CI/security audit、#21 S-5.6 shared contract freeze；其后启动 #22 causal week/month bars、#28 FixtureBundle、#25 公司行动 pipeline、#30 策略 reference pack 和 #27 独立 QA。完整 Owner、文件边界和 merge train 见 `COLLABORATION_SCOPE.md`。
+已完成的并行基础：#22 causal week/month bars、#23 Metrics v1、#24 verified artifact inspection、#30 五策略 fixture reference pack，以及 #26 SW02-01..05。当前可并行工作为：#26 SW02-06、#5 QQQ/DIA 冲突证据与 #25 公司行动 contract/design。#27 FixtureBundle 仍等待 A3 normalized hash contract；#17 application/CLI 仍等待 CORE-05/06 与 FixtureBundle；#28 是增量独立 QA。完整 Owner、文件边界和 merge train 见 `COLLABORATION_SCOPE.md`；实时 head SHA 与 blocker 以 #14 为准。
 
 ## 13. 已确认的产品与工程决策
 
@@ -260,6 +263,6 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 
 - base conda 已确认可使用 AkShare、Tushare、pandas 与 NumPy；项目开发依赖按 `pyproject.toml` 安装；
 - Tushare 凭据仅通过本地忽略配置使用，已验证中国日线接口可调用，但没有美股权限；凭据及响应数据不得因测试便利进入 Git；
-- M0、reference engine、RawCapture、CaptureStore baseline 与 immutable run artifact v1 已完成；当前由 S-5.6 审查 #18 -> #19 -> #20 -> #16，并冻结周/月、DatasetRelease、application 和 artifact lineage 的共享契约；
+- M0、reference engine、RawCapture、CaptureStore baseline、immutable run artifact v1、verified artifact inspection、Metrics v1、因果周/月重采样及五策略 fixture reference pack 已完成；当前由 S-5.6 审查 #18 -> #19 -> #20 -> #16，并冻结 DatasetRelease、application 和 artifact v2 lineage 的共享契约；
 - 新增资深量化、公司行动、软件和 QA 人力按 `COLLABORATION_SCOPE.md` 在独占目录并行，不直接修改 Argus 的 active files；
 - QQQ 是 Nasdaq-100 ETF，不代表 Nasdaq Composite；若目标实际是 Nasdaq Composite，应把 QQQ 改为 ONEQ 并重新冻结 asset identity。
