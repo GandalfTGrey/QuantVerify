@@ -1,0 +1,96 @@
+name: Offline Market Data CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-market-data:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13.14"
+          cache: pip
+      - name: Build test image with market-data dependencies
+        run: |
+          python_version="$(python -c 'import platform; print(platform.python_version())')"
+          test "${python_version}" = "3.13.14"
+          docker build \
+            --build-arg "PYTHON_VERSION=${python_version}" \
+            --tag quantverify-offline-ci:local \
+            --file - \
+            . <<'DOCKERFILE'
+          ARG PYTHON_VERSION
+          FROM python:${PYTHON_VERSION}-slim-bookworm
+          WORKDIR /workspace
+          COPY . .
+          RUN python -m pip install --no-cache-dir '.[dev,market-data]' \
+              && python -m pip check
+          DOCKERFILE
+      - name: Verify imports, blocked network, and full test suite
+        run: |
+          docker run \
+            --rm \
+            --interactive \
+            --network none \
+            --entrypoint /bin/sh \
+            quantverify-offline-ci:local \
+            -s <<'CONTAINER_SCRIPT'
+          set -eu
+          python - <<'PY'
+          from importlib import import_module
+          from importlib.metadata import version
+          from pathlib import Path
+          import socket
+
+          dependencies = (
+              ("akshare", "akshare"),
+              ("yfinance", "yfinance"),
+              ("pandas-market-calendars", "pandas_market_calendars"),
+          )
+          for distribution, module_name in dependencies:
+              module = import_module(module_name)
+              module_path = Path(module.__file__).resolve() if module.__file__ else None
+              if module_path is None:
+                  raise SystemExit(f"{module_name} has no import path")
+              print(f"market-data dependency: {distribution}=={version(distribution)}")
+              print(f"market-data import: {module_name} -> {module_path}")
+
+          interfaces = sorted(path.name for path in Path("/sys/class/net").iterdir())
+          print(f"network interfaces under --network none: {interfaces}")
+          if interfaces != ["lo"]:
+              raise SystemExit(f"unexpected network interface available: {interfaces}")
+
+          try:
+              socket.getaddrinfo("example.com", 443, type=socket.SOCK_STREAM)
+          except OSError as error:
+              print(f"DNS probe expected failure: {type(error).__name__}: {error}")
+          else:
+              raise SystemExit("DNS probe unexpectedly succeeded under --network none")
+
+          try:
+              with socket.create_connection(("1.1.1.1", 443), timeout=2):
+                  pass
+          except OSError as error:
+              print(f"TCP probe expected failure: {type(error).__name__}: {error}")
+          else:
+              raise SystemExit("TCP probe unexpectedly succeeded under --network none")
+          PY
+          python -m pytest \
+            --cov=quantverify \
+            --cov-report=term-missing \
+            --cov-fail-under=85
+          CONTAINER_SCRIPT
