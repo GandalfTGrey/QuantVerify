@@ -64,6 +64,56 @@ class CaptureStoreSecretGuardTests(TestCase):
                 "request.query.AWSAccessKeyId",
             ),
             (
+                "aws credential header",
+                {"headers": {"X-Amz-Credential": SECRET_VALUE}},
+                "request.headers.X-Amz-Credential",
+            ),
+            (
+                "aws signature header",
+                {"headers": {"X-Amz-Signature": SECRET_VALUE}},
+                "request.headers.X-Amz-Signature",
+            ),
+            (
+                "uppercase compact access key header",
+                {"headers": {"X-ACCESSKEY": SECRET_VALUE}},
+                "request.headers.X-ACCESSKEY",
+            ),
+            (
+                "uppercase compact secret key header",
+                {"headers": {"X-SECRETKEY": SECRET_VALUE}},
+                "request.headers.X-SECRETKEY",
+            ),
+            (
+                "uppercase compact access token",
+                {"query": {"ACCESSTOKEN": SECRET_VALUE}},
+                "request.query.ACCESSTOKEN",
+            ),
+            (
+                "uppercase compact client secret",
+                {"query": {"CLIENTSECRET": SECRET_VALUE}},
+                "request.query.CLIENTSECRET",
+            ),
+            (
+                "uppercase compact refresh token",
+                {"query": {"REFRESHTOKEN": SECRET_VALUE}},
+                "request.query.REFRESHTOKEN",
+            ),
+            (
+                "uppercase compact session token",
+                {"query": {"SESSIONTOKEN": SECRET_VALUE}},
+                "request.query.SESSIONTOKEN",
+            ),
+            (
+                "uppercase compact security token",
+                {"query": {"SECURITYTOKEN": SECRET_VALUE}},
+                "request.query.SECURITYTOKEN",
+            ),
+            (
+                "uppercase compact auth token",
+                {"query": {"AUTHTOKEN": SECRET_VALUE}},
+                "request.query.AUTHTOKEN",
+            ),
+            (
                 "bearer token",
                 {"query": {"bearer_token": SECRET_VALUE}},
                 "request.query.bearer_token",
@@ -82,6 +132,11 @@ class CaptureStoreSecretGuardTests(TestCase):
                 "private key camel case",
                 {"privateKey": SECRET_VALUE},
                 "request.privateKey",
+            ),
+            (
+                "signature semantic token is fail closed",
+                {"metadata": {"schema_signature": SECRET_VALUE}},
+                "request.metadata.schema_signature",
             ),
             (
                 "cookie family",
@@ -120,6 +175,7 @@ class CaptureStoreSecretGuardTests(TestCase):
             "secretary": "public-metadata",
             "access_mode": "public",
             "private_mode": False,
+            "schema_fingerprint": "public-schema-v1",
         }
         with TemporaryDirectory() as directory:
             stored = CaptureStore(Path(directory)).write(
