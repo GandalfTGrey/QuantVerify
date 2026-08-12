@@ -23,7 +23,7 @@
 |---|---|---:|---|
 | 项目所有者 | 产品目标、风险偏好、最终争议裁决 | 决策/验收 | 日常代码合并门禁 |
 | S-5.6 | 架构、共享契约、关键路径、review、主线合并 | 1 个关键 review + 1 个小型契约工作 | 长期占用已可委派的独占模块 |
-| Argus | CaptureStore、数据谱系、A3/A4 与数据正确性复核 | 现有堆叠清空前只处理 #18-#20/#16 | 新 provider、CLI、策略、公司行动实现 |
+| Argus | CaptureStore、数据谱系、A3/A4 与数据正确性复核 | A4 design/implementation + 1 个数据复核 | 新 provider、CLI、策略、公司行动实现 |
 | 资深量化工程师（Q-Lead） | 频率变换、策略/指标 golden、研究语义复核 | 1 个实现 + 1 个只读审计 | CaptureStore/A3、应用编排 |
 | 公司行动专员（CA-Lead） | point-in-time action vintages 与收益序列变换 | 1 个设计或实现 | provider 准入、策略优化 |
 | 资深软件开发者（Dev-Lead） | artifact、metrics、fixture、CLI shell、CI 可靠性 | 1 个实现 + 1 个只读审计 | 自行定义研究准入语义 |
@@ -45,8 +45,8 @@ Contributor-Role: <S-5.6|Argus|Q-Lead|CA-Lead|Dev-Lead|QA-Lead>
 | ID | 共享契约风险 | 冻结结果 |
 |---|---|---|
 | CORE-01 | 已完成：周/月频率契约 | `BarFrequency` 已区分 daily input 与 derived weekly/monthly frequency；各模块不得自造字符串/枚举 |
-| CORE-02 | 已完成（release bridge 待 CORE-03）：period series envelope | `SeriesDescriptor` / `DerivedPeriodBar` 已绑定 frequency、adjustment、source lineage、constituent schedule、`available_at` 与 completeness |
-| CORE-03 | `DataSnapshot` 未绑定 normalizer、quality policy/report、eligible range | 定义不可变 `DatasetReleaseRef`，并使 experiment identity 对质量政策和 release identity 敏感 |
+| CORE-02 | 已完成：period series envelope | `SeriesDescriptor` / `DerivedPeriodBar` 已绑定 frequency、adjustment、source lineage、constituent schedule、`available_at` 与 completeness；release source bridge 已冻结 |
+| CORE-03 | 已完成：DatasetRelease reference contract（PR #59、ADR-0011） | RAW/daily/single-source `DatasetReleaseRef` 绑定 normalizer、quality policy/report、eligible intervals、calendar/schedule 与单资产 experiment identity；A4 authenticity 仍由 verified factory/store 证明 |
 | CORE-04 | 已完成契约层：显式 session schedule | reference strategy 使用显式 schedule 的下一 session open；生产权威性仍由 A4 pinned calendar/release 证明 |
 | CORE-05 | `core.ports` 与 ReferenceEngine、RunArtifactStore 的真实签名漂移 | 冻结 application command DTO、handler ports 与 composition boundary |
 | CORE-06 | artifact v1 未绑定 normalized input/quality report/metrics | 在不破坏 v1 verified read 的前提下决定 artifact v2 lineage 与 metrics schema |
@@ -58,7 +58,8 @@ Contributor-Role: <S-5.6|Argus|Q-Lead|CA-Lead|Dev-Lead|QA-Lead>
 ```text
 Lane A — Data trust
 #18 credential guard -> #19 atomic publish -> #20 verified replay
-    -> #16 VerifiedCapture integration / A3 -> DATA-02 A4 DatasetRelease
+    -> #16 VerifiedCapture integration / A3 -> CORE-03 release ref [Done]
+    -> DATA-02 A4 verified factory/store + authoritative calendar resolver
 
 Lane B — Research correctness
 QD-01 #5 conflict evidence (independent now)
@@ -66,8 +67,9 @@ CORE-01/02/04 -> QF-01 causal week/month bars
     -> QF-02 S4 -> S2 -> S3 -> S1 -> S5 signal-only
 
 Lane C — Platform
-SW-01 artifact inspection + DEV-01 metrics + SW-02 CI audit
-    -> SW-03 FixtureBundle -> CORE-05/06 -> DEV-02 CLI/application wiring
+SW-01 artifact inspection + DEV-01 metrics + SW-02 CI audit [Done]
+    -> SW-03 FixtureBundle || CORE-05/06
+    -> DEV-02 CLI/application wiring
 
 Lane D — Return semantics
 CA-01 contract/design -> action transform -> A4-derived release integration
@@ -86,7 +88,7 @@ Independent QA consumes merged contracts and never becomes a production dependen
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Argus / S-5.6；A3 另需 Q-Lead 科学复核 |
-| Branch / Status | `argus/*`；#18 -> #19 -> #20 与 #16 均为 Blocked / Draft review，WIP 已满 |
+| Branch / Status | Done；#18/#19/#20/#16 已合并，A3 为 Quality Suite v2，ADR-0009 Accepted |
 | Input contract | immutable capture bytes、request identity、manifest、normalized input reference、显式 quality policy |
 | Output contract | verified capture；内容寻址且区间级的 quality report；可重复的 eligibility 决定 |
 | 独占文件 | `quantverify/data/store.py`、`quantverify/data/quality/**` 及对应测试、ADR-0007/0009 |
@@ -94,23 +96,23 @@ Independent QA consumes merged contracts and never becomes a production dependen
 | Dependencies | #18 P0 -> #19 -> #20 -> #16 接入 `load_verified()` |
 | Acceptance | secret fail closed；atomic publish；verified replay；report identity 绑定 normalized content、完整 policy、capture/manifest/normalizer/schema version；区间 eligibility；真实异常 fixture |
 | Forbidden | 网络 CI、冲突值静默平均、同一 evidence/provider 伪装双源、区间外异常全局封杀、修改 strategy/engine/CLI |
-| Merge order | 严格 #18、#19、#20、#16；每层基于新 `main` 重放 CI |
+| Merge order | 已完成：#18 -> #19 -> #20 -> #16；每层均在新 `main` 重放 CI |
 
-Argus 在上述队列清空前不再领取新实现；可以回答 review 或准备 A4 设计，不开新代码 PR。
+DATA-01 队列已清空。Argus 可以领取 A4，但必须先把 verified calendar resolver、完整 A3 replay input closure 和 immutable publication 边界写入 #29；不得从 `DatasetReleaseRef` 自洽性推导 authenticity。
 
 ### DATA-02 — A4 immutable DatasetRelease
 
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Argus / S-5.6 + Q-Lead |
-| Branch / Status | `argus/dataset-release-v1`；Issue #29，Blocked on DATA-01 |
-| Input contract | `VerifiedCapture`、确定性 normalization、accepted quality report、显式 adjustment mode |
+| Branch / Status | `argus/dataset-release-v1`；Issue #29，Ready for design；实现仍需 verified calendar resolver contract |
+| Input contract | 完整 `QualitySourceData`/revision/policy/expected-sessions replay closure、确定性 ordered normalization、权威 calendar artifact/schedule、显式 adjustment mode |
 | Output contract | immutable release ID、normalized content hash、eligible intervals、exception refs、quality policy/report refs、adjustment mode |
 | 独占文件 | 新建 `quantverify/data/releases/**` 及对应测试 |
 | 共享文件 | `DatasetReleaseRef`、ExperimentConfig 仅由 CORE-03 修改 |
-| Acceptance | identity 对内容、normalizer、schema、quality policy/report、eligible range 和 adjustment 敏感；旧 release 不覆盖；requested range fail closed |
-| Forbidden | 按策略表现选源、无证据自动 PASS、mutable `latest`、直接调用 provider、把 fixture 晋升 Gold |
-| Merge order | DATA-01 后；真实数据 preflight 前 |
+| Acceptance | 每 interval 的 report 完整重放为 ELIGIBLE；v1 恰好一个 active source；发布 bars 与 selected ordered normalized identity 精确一致；pinned schedule exact slice；identity 对内容、normalizer、schema、quality policy/report、eligible range 和 adjustment 敏感；旧 release 不覆盖；requested range fail closed |
+| Forbidden | 多 source report、按策略表现选源、无证据自动 PASS、mutable `latest`、从 bars 自举 calendar、直接调用 provider、把 fixture 晋升 Gold |
+| Merge order | CORE-03 后；verified calendar resolver 先于 Gold factory；真实数据 preflight 前 |
 
 ### QD-01 — QQQ/DIA 冲突证据与独立裁决包
 
@@ -199,7 +201,7 @@ Argus 对 CA-01 是 correctness reviewer，不再同时做 Owner，以消除 A3/
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | 第二位 Dev-Lead / S-5.6 |
-| Branch / Status | Dev-Lead 串行个人分支；Issue #26，audit 与 SW02-01..05 Done，SW02-06 In progress |
+| Branch / Status | Done；Issue #26，audit 与 SW02-01..06 已合并 |
 | Input contract | 当前 workflows、pyproject、安装与测试命令 |
 | Output contract | 最小权限、timeout/concurrency、wheel/install smoke、离线测试和可追踪依赖更新 |
 | 独占文件 | `.github/workflows/**`、`.github/dependabot.yml`、独立 CI/security 文档 |
@@ -212,13 +214,13 @@ Argus 对 CA-01 是 correctness reviewer，不再同时做 Owner，以消除 A3/
 | 字段 | 内容 |
 |---|---|
 | Owner / Reviewer | Dev-Lead / Argus + S-5.6 |
-| Branch / Status | `dev/fixture-bundle-v1`；Issue #27，design now，code blocked on A3 normalized hash contract |
+| Branch / Status | `dev/fixture-bundle-v1`；Issue #27，Ready；A3 ordered normalized identity 已随 #16 合并 |
 | Input contract | 显式注册的 fixture ID/manifest |
 | Output contract | immutable `LoadedFixture`：asset/frequency/calendar/adjustment、snapshot、ordered bars、content hash/schema、expected-session identity |
 | 独占文件 | 新建 `quantverify/fixtures/**`、fixture 资源和测试 |
 | Acceptance | Decimal/timezone/order 确定；manifest/hash 不一致失败；完全离线；仅显式资源；顺序变化不能静默改语义 |
 | Forbidden | 修改 `data/store.py`、`data/quality/**`；任意 path/implicit latest；将 fixture 宣称为真实 Gold release |
-| Merge order | A3 hash contract 后、DEV-02 fixture mode 前 |
+| Merge order | 可与 CORE-05/06 并行；DEV-02 fixture mode 前 |
 
 ### DEV-02 — Fixture-only application service 与 CLI shell
 
