@@ -4,6 +4,12 @@ from quantverify.artifacts.store import (
     RunArtifactManifest,
     RunArtifactStore,
     StoredRunArtifact,
+    VerifiedRunArtifact,
 )
 
-__all__ = ["RunArtifactManifest", "RunArtifactStore", "StoredRunArtifact"]
+__all__ = [
+    "RunArtifactManifest",
+    "RunArtifactStore",
+    "StoredRunArtifact",
+    "VerifiedRunArtifact",
+]
