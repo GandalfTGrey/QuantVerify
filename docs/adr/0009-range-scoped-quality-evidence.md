@@ -220,7 +220,7 @@ Corporate-action window 与 adjusted-return comparison 保留 registry 扩展点
 - 双源校验从“全局真理规则”变为版本化 evidence policy，并且只按独立 provider 计数；
 - normalized rows、normalizer、policy 内容、calendar session set 的任何科学变化都会改变报告 identity；
 - unknown normalized schema fail closed，而不是静默 PASS；
-- 后续 A4 `DatasetRelease` 可以直接消费 range eligibility 和 immutable scientific input refs，而无需重新解释 raw findings；
+- 后续 A4 `DatasetRelease` 只有在 `QualitySuite.verify_report(...)` 对完整输入闭包重放成功后，才可以消费其返回的 range eligibility 和 immutable scientific input refs；A4 无需自行重新解释 raw findings，但不得绕过 replay gate；
 - 报告模型和测试数量增加，但换来可追溯、可重算和可扩展的数据质量语义。
 
 ## Non-goals
