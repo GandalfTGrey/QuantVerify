@@ -18,8 +18,8 @@ from quantverify.data.quality import (
     QualityEvidenceRef,
     QualityPolicy,
     QualitySourceData,
-    QualitySuite as PublicQualitySuite,
 )
+from quantverify.data.quality import QualitySuite as PublicQualitySuite
 from quantverify.data.quality.suite import QualitySuite as DirectQualitySuite
 
 QualitySuiteType: TypeAlias = type[PublicQualitySuite]
