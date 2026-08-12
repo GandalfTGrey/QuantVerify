@@ -589,6 +589,35 @@ def test_non_finite_price_fails_closed_when_upstream_validation_is_bypassed() ->
     assert any(finding.finding_code == "non_finite_field" for finding in report.findings)
 
 
+def test_adversarial_non_decimal_numbers_keep_deterministic_input_identity() -> None:
+    session = date(2026, 1, 2)
+    valid = bar(session.isoformat())
+    infinite = valid.model_copy(update={"close": float("inf")})
+    integer = valid.model_copy(update={"close": 100})
+
+    first = NormalizedInputRef.from_bars(
+        (infinite,),
+        schema_version="normalized-bar-v1",
+        normalizer_id="fixture-normalizer",
+        normalizer_version="1.0.0",
+    )
+    second = NormalizedInputRef.from_bars(
+        (infinite,),
+        schema_version="normalized-bar-v1",
+        normalizer_id="fixture-normalizer",
+        normalizer_version="1.0.0",
+    )
+    integer_ref = NormalizedInputRef.from_bars(
+        (integer,),
+        schema_version="normalized-bar-v1",
+        normalizer_id="fixture-normalizer",
+        normalizer_version="1.0.0",
+    )
+
+    assert first == second
+    assert first.content_hash != integer_ref.content_hash
+
+
 def test_revision_is_evidence_and_policy_can_make_it_incomplete() -> None:
     session = date(2026, 1, 2)
     previous = source(
