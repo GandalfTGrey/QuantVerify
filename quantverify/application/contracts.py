@@ -9,7 +9,14 @@ from enum import IntEnum, StrEnum
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, StrictInt, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictInt,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from quantverify.core.enums import BarFrequency, DecisionTime, ExecutionPrice
 from quantverify.core.identity import stable_hash
@@ -82,7 +89,17 @@ def _scientific_identity_value(value: Any) -> Any:
             raise ValueError("fixture scientific identity requires finite Decimals")
         if value == 0:
             return "0"
-        return format(value.normalize(), "f")
+        parts = value.as_tuple()
+        digits = list(parts.digits)
+        exponent = int(parts.exponent)
+        while digits[-1] == 0:
+            digits.pop()
+            exponent += 1
+        return {
+            "sign": parts.sign,
+            "coefficient": "".join(str(digit) for digit in digits),
+            "exponent": exponent,
+        }
     if isinstance(value, datetime):
         if value.tzinfo is None:
             raise ValueError("fixture scientific identity requires aware datetimes")
@@ -248,6 +265,13 @@ class RunFixtureCommand(DomainModel):
 class InspectRunCommand(DomainModel):
     schema_version: Literal["inspect-run-command-v1"] = "inspect-run-command-v1"
     manifest_path: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("manifest_path", mode="before")
+    @classmethod
+    def reject_noncanonical_raw_path(cls, value: Any) -> Any:
+        if isinstance(value, str) and value != value.strip():
+            raise ValueError("manifest_path must not contain surrounding whitespace")
+        return value
 
     @model_validator(mode="after")
     def validate_portable_relative_path(self) -> InspectRunCommand:

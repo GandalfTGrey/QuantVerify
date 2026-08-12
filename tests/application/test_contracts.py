@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from unittest import TestCase
 
 from pydantic import ValidationError
@@ -129,7 +129,7 @@ class FixtureRunSpecTests(TestCase):
         baseline = spec()
         self.assertEqual(
             baseline.fixture_run_spec_id,
-            "fixture-run-spec_725de6532740f59a85fc73d9",
+            "fixture-run-spec_486b2dee5c51dc53aa956d8b",
         )
         changes = (
             {"execution": ReferenceExecutionSpec(initial_cash=Decimal("20000"))},
@@ -193,6 +193,28 @@ class FixtureRunSpecTests(TestCase):
             execution=ReferenceExecutionSpec(initial_cash=Decimal("10000.00")),
         )
         self.assertEqual(equivalent.fixture_run_spec_id, baseline.fixture_run_spec_id)
+
+    def test_decimal_identity_is_context_independent_and_collision_resistant(self) -> None:
+        first = "12345678901234567890123456781"
+        second = "12345678901234567890123456782"
+        first_ids: set[str] = set()
+        second_ids: set[str] = set()
+        for precision in (10, 28, 50):
+            with localcontext() as context:
+                context.prec = precision
+                first_ids.add(
+                    spec(
+                        execution=ReferenceExecutionSpec(initial_cash=Decimal(first))
+                    ).fixture_run_spec_id
+                )
+                second_ids.add(
+                    spec(
+                        execution=ReferenceExecutionSpec(initial_cash=Decimal(second))
+                    ).fixture_run_spec_id
+                )
+        self.assertEqual(len(first_ids), 1)
+        self.assertEqual(len(second_ids), 1)
+        self.assertNotEqual(first_ids, second_ids)
 
     def test_fixture_mode_rejects_release_and_alias_mismatch(self) -> None:
         release_dataset: DatasetReleaseRef = release()
@@ -335,6 +357,9 @@ class BoundaryResultTests(TestCase):
             "run_manifests/latest.json",
             "run_manifests/evil\x00.json",
             "run_manifests/evil\n.json",
+            " run_manifests/file.json",
+            "run_manifests/file.json ",
+            "run_manifests/file.json\t",
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 InspectRunCommand(manifest_path=invalid)
