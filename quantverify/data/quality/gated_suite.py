@@ -12,6 +12,7 @@ from quantverify.data.quality.models import (
     CheckResult,
     CheckStatus,
     DataQualityReportV2,
+    QualityFinding,
     QualitySourceData,
     RevisionPair,
 )
@@ -101,7 +102,7 @@ class QualitySuite(_BaseQualitySuite):
             for session, count in counts.items()
             if 0 < count < policy.minimum_sources_per_session
         }
-        findings = []
+        findings: list[QualityFinding] = []
         evidence_ids = tuple(source.evidence.evidence_id for source in sources)
         findings.extend(
             self._coverage_findings(
