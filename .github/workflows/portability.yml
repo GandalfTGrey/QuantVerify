@@ -1,0 +1,62 @@
+name: Apple Silicon Portability CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portability-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Verify Apple Silicon host and runtime
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from zoneinfo import ZoneInfo
+          import platform
+          import sys
+
+          system = platform.system()
+          machine = platform.machine()
+          if system != "Darwin" or machine != "arm64":
+              raise SystemExit(f"expected Darwin arm64, got {system} {machine}")
+
+          new_york = ZoneInfo("America/New_York")
+          with TemporaryDirectory(prefix="quantverify-portability-") as temporary:
+              temporary_path = Path(temporary).resolve()
+              if not temporary_path.is_absolute():
+                  raise SystemExit(f"temporary path did not resolve absolutely: {temporary_path}")
+              print(f"temporary filesystem path: {temporary_path}")
+
+          print(f"host: {system} {machine}")
+          print(f"python: {platform.python_version()}")
+          print(f"filesystem encoding: {sys.getfilesystemencoding()}")
+          print(f"tzdata: {version('tzdata')}")
+          print(f"zoneinfo: {new_york.key}")
+          PY
+      - name: Lint
+        run: ruff check .
+      - name: Type check
+        run: mypy quantverify
+      - name: Test
+        run: pytest --cov=quantverify --cov-report=term-missing --cov-fail-under=85
