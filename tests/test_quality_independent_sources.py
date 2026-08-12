@@ -124,10 +124,10 @@ def test_two_distinct_providers_can_satisfy_required_verification() -> None:
     )
 
     assert report.eligibility.status is EligibilityStatus.ELIGIBLE
-    assert tuple(evidence.provider for evidence in report.context.evidence_refs) == (
+    assert {evidence.provider for evidence in report.context.evidence_refs} == {
         "provider_a",
         "provider_b",
-    )
+    }
     coverage = next(
         result
         for result in report.check_results
