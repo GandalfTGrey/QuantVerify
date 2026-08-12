@@ -2,7 +2,7 @@
 
 > Status: Active
 > Adopted: 2026-08-10
-> Last reviewed: 2026-08-11
+> Last reviewed: 2026-08-12
 > Applies to: human owner、S-5.6、Argus、T-5.6 历史贡献及后续具名贡献者
 
 ## 1. 协作目标
@@ -16,6 +16,10 @@
 | 项目所有者 | 决定研究目标、风险偏好和最终裁决 | Issue/PR 中的明确决定 |
 | S-5.6 | 技术负责人；架构裁决、质量门禁、任务编排与主线合并 | 个人集成分支、review、测试、合并决定 |
 | Argus | 数据谱系、量化研究正确性与审计 | ADR、数据调查、review、Draft PR |
+| 资深量化工程师 | 频率变换、策略/指标 golden 与研究语义复核 | 独立个人分支、golden fixture、审计报告 |
+| 公司行动专员 | point-in-time 公司行动与收益序列变换 | action evidence、transform manifest、测试 |
+| 资深软件开发者 | artifact、metrics、fixture、CLI shell 和 CI 可靠性 | 独立个人分支、实现与对抗测试 |
+| 独立验证者 | 黑盒 contract、golden、metamorphic 与跨平台验证 | 只依赖公开 API 的验证包 |
 | T-5.6 | 已完成阶段性实现的历史贡献者；当前不新增提交 | 已有个人分支、测试与 Draft PR |
 
 项目所有者保留最终裁决权。S-5.6 对进入 `main` 的技术完整性和合并顺序负责，但任何角色都不能仅凭身份覆盖可复现证据、ADR-0001 的文档优先级或 fail-closed 原则。
@@ -27,8 +31,9 @@
 | 尚未实现的问题、数据异常、候选方案 | GitHub Issue | 允许在写代码前对齐目标与验收条件 |
 | 具体实现及逐行讨论 | Draft PR | diff、CI 和 review 上下文位于同一处 |
 | 跨模块或长期语义决定 | ADR | 决定不可被后续代码静默改写 |
-| 当前角色范围和工作队列 | 角色 Charter | 避免个人职责混入系统架构 |
-| 临时状态 | PR comment | 便于交接，但不能替代 ADR 或测试 |
+| 长期个人职责 | 角色 Charter | 避免个人职责混入系统架构 |
+| 当前工作包与文件所有权 | `COLLABORATION_SCOPE.md` | 统一输入输出、依赖、禁区和合并顺序 |
+| 临时状态 | Issue #14 / PR comment | 便于交接，但不能替代 ADR 或测试 |
 
 聊天可以启动工作，但关键结论必须回写上述渠道之一。
 
@@ -54,6 +59,15 @@ Issue、PR 描述或协作评论至少包含：
 - 合并顺序从栈底到栈顶；底层合并后及时把上层 PR base 调整到新的稳定基线；
 - 当长堆叠已形成严格线性历史且逐层合并会制造重复或失真时，S-5.6 可建立面向 `main` 的集成分支；集成 PR 必须保留原提交与署名、通过完整 diff 审查和 CI，并在合并后说明哪些 Draft PR 被替代；
 - 工作区存在无关或未跟踪用户文件时，显式逐文件暂存。
+
+当多个身份通过同一 GitHub 账号提交时，PR 描述和 commit message 应包含：
+
+```text
+Contributor-Identity: <name>
+Contributor-Role: <role>
+```
+
+当前不使用无法区分实际身份的角色级 `CODEOWNERS` 规则。
 
 ## 5. Review 严重性与处理
 
@@ -89,10 +103,20 @@ Recommended next PR:
 
 ## 8. 当前协作起点
 
-- Argus PR #7 建立 `RawCapture -> offline normalization` 边界；
-- T-5.6 PR #8 修复嵌套不可变性和 schema drift，并建立本协议；
-- T-5.6 PR #9 实现 provider-agnostic CaptureStore（A2）；
-- S-5.6 负责把线性提交链审查并集成到 `main`，同时保持原作者提交历史；
-- Argus Issue #10 负责 Quality Suite v2，Issue #11 负责 CaptureStore 独立对抗审计。
+- Foundation、RawCapture、CaptureStore、reference engine 与 immutable artifact v1 已进入 `main`；
+- Argus 当前按 #18 -> #19 -> #20 -> #16 清理数据可信关键路径；
+- 新增人力按 `COLLABORATION_SCOPE.md` 的 Data、Research、Platform、Return Semantics 和 QA 泳道协作；
+- GitHub Issue #14 保存当前 branch、head SHA、blocker 和交接状态。
 
 协议本身是活文档。实质规则修改通过 PR 讨论；研究语义变化仍须使用 ADR。
+
+## 9. 稳定容量与合并规则
+
+- 每位贡献者最多同时拥有 1 个实现 PR 和 1 个只读审计/review；
+- stacked PR 最大深度为 3；超过后先清空队列；
+- 一次只向 `main` 合并一个 PR；锁定 head SHA，并确保 CI 对该 SHA 绿色；
+- 合并后基于新 `main` 重放全套测试，再处理下一层；
+- 一个 PR 只改变一个跨模块契约，不顺手重构其他工作包；
+- 数据身份、财务计算、权限或秘密边界必须由作者之外的领域 reviewer 审查；
+- `core/models.py`、`core/ports.py`、配置 schema、实验身份与 ADR 编号由 S-5.6 统一批准；
+- 当前工作包的文件边界、Definition of Ready/Done 和 merge train 以 `COLLABORATION_SCOPE.md` 为准。

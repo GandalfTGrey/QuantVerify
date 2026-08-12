@@ -31,5 +31,6 @@ pytest
 - [策略宇宙](docs/STRATEGY_UNIVERSE.md)
 - [M1 研究范围](docs/M1_RESEARCH_SCOPE.md)
 - [贡献者协作协议](docs/COLLABORATION_PROTOCOL.md)
+- [协作范围与并行交付地图](docs/COLLABORATION_SCOPE.md)
 - [Argus 协作与研究工程守则](docs/ARGUS_COLLABORATION_CHARTER.md)
 - [Architecture Decision Records](docs/adr/README.md)

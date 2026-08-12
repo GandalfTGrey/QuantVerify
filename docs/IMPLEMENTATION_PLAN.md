@@ -1,6 +1,6 @@
 # QuantVerify 技术实施与项目计划
 
-> 计划基线：2026-08-11
+> 计划基线：2026-08-12
 > 方法：Vertical Slice + milestone exit criteria
 > 估算单位：1 engineer-day（专注开发日），用于排序和容量规划，不是日期承诺
 
@@ -8,7 +8,9 @@
 
 每个里程碑都交付一条可验证的完整能力，并设置退出条件。新模块数量不是进度指标；可信、可复现的研究闭环才是。
 
-建议先由 1 名 Python/quant engineer 完成 M0-M2。若多人并行，按 Data、Research Engine、Validation 三条 stream 分工，但核心领域模型和研究协议保持单一 owner。
+项目现按 Data Trust、Research Correctness、Platform、Return Semantics 和 Independent QA 五条泳道组织。共享领域模型、实验身份、application/preflight 契约和 ADR 编号仍由 S-5.6 单一批准；独占目录按 `COLLABORATION_SCOPE.md` 分配。
+
+增加人力不会改变依赖方向。fixture-only 研究闭环可以与真实数据准入并行；真实市场研究必须等待 CaptureStore hardening、A3、A4，以及目标收益语义所需的公司行动 policy 全部通过。
 
 ## 2. 当前状态
 
@@ -29,9 +31,13 @@
 | Reference engine v1 | Done | long/flat、next-open、成本与逐期 equity golden tests |
 | RawCapture boundary | Done | 一次抓取、深度不可变、离线 normalization |
 | CaptureStore A2 | Done / Audit | content-addressed capture/manifest；Argus Issue #11 独立审计 |
-| Quality Suite v2 | Assigned | Argus Issue #10；区间级准入与离线质量证据 |
+| CaptureStore hardening | In review | Argus #18 -> #19 -> #20；secret guard、atomic publish、verified replay |
+| Quality Suite v2 | Draft / Review | Argus #16；接入 VerifiedCapture 后再做最终科学审查 |
+| Immutable artifact v1 | Done | canonical JSON result/manifest、hash、verified load；ADR-0008 |
+| Metrics v1 | Ready | Total/CAGR/Vol/Sharpe/MaxDD；可由独立 Dev/Q-Lead 实现 |
+| Experiment service/CLI | Blocked / Design | Issue #17；fixture-only，等待 application/artifact/fixture 契约冻结 |
 | 真实市场数据准入 | Blocked | AkShare 美股历史缺口；Tushare 无美股权限；尚无 Gold dataset |
-| S-5.6 主线集成 | In progress | 全量审查、CI、单一 integration PR、合并后关闭被替代 Draft PR |
+| S-5.6 foundation integration | Done | PR #12 与 #15 已合并；当前聚焦关键路径 review 和共享契约 |
 
 ## 3. Milestone 0 — Foundation
 
@@ -76,8 +82,8 @@
 | M1-04 | Long/flat allocator | M1-03 | target/effective timestamps 正确 | 0.5 |
 | M1-05 | Reference engine | M1-04 | 逐期现金、仓位、收益、成本可对账 | 2.0 |
 | M1-06 | Metrics v1 | M1-05 | Total/CAGR/Vol/Sharpe/MaxDD 定义与测试 | 1.5 |
-| M1-07 | Artifact writer | M1-05 | versioned Parquet + manifest + hashes | 1.0 |
-| M1-08 | Experiment service/CLI | M1-01..07 | 单命令运行并输出 experiment/run ID | 1.0 |
+| M1-07 | Artifact writer | M1-05 | v1 canonical JSON result + manifest + hashes；已完成 | 1.0 |
+| M1-08 | Experiment service/CLI | M1-01..07 | fixture-only 单命令运行并输出 experiment/run ID；真实数据等 A4 | 1.0 |
 | M1-09 | VectorBT adapter spike | M1-05 | golden fixture 与 reference engine 对账 | 1.5 |
 | M1-10 | End-to-end tests | all | 无网络 fixture 可重复通过 | 1.0 |
 
@@ -211,6 +217,8 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 - ADR-0005 AkShare ingestion boundary；
 - ADR-0006 RawCapture normalization boundary；
 - ADR-0007 provider-agnostic CaptureStore。
+- ADR-0008 immutable reference-result artifacts。
+- ADR-0009 Quality Suite v2（随 #16 审查接受）。
 
 ### 项目管理
 
@@ -222,11 +230,16 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 
 ## 12. 当前下一批 Issues
 
-1. `#10 Argus A3: implement range-scoped Quality Suite v2`
-2. `#11 Argus independent audit: adversarially verify CaptureStore A2`
-3. `A4: DatasetRelease + range-scoped experiment preflight`（依赖 #10）
-4. `M1-07: Artifact writer + immutable run manifest`
-5. `M1-08: experiment service / CLI`（依赖 M1-07）
+关键路径按以下顺序处理：
+
+1. `#18 P0 credential guard`；
+2. `#19 atomic publish`（依赖 #18）；
+3. `#20 verified replay`（依赖 #19）；
+4. `#16 A3 Quality Suite v2 + VerifiedCapture integration`（依赖 #20）；
+5. `A4 DatasetRelease + range-scoped eligibility`（依赖 #16）；
+6. `#17 M1-08 fixture-only experiment service / CLI`（真实数据入口另依赖 A4）。
+
+可并行的非关键路径工作：#5 QQQ/DIA 冲突证据、#23 Metrics v1、#24 verified artifact inspection、#26 CI/security audit、#21 S-5.6 shared contract freeze；其后启动 #22 causal week/month bars、#28 FixtureBundle、#25 公司行动 pipeline、#30 策略 reference pack 和 #27 独立 QA。完整 Owner、文件边界和 merge train 见 `COLLABORATION_SCOPE.md`。
 
 ## 13. 已确认的产品与工程决策
 
@@ -247,5 +260,6 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 
 - base conda 已确认可使用 AkShare、Tushare、pandas 与 NumPy；项目开发依赖按 `pyproject.toml` 安装；
 - Tushare 凭据仅通过本地忽略配置使用，已验证中国日线接口可调用，但没有美股权限；凭据及响应数据不得因测试便利进入 Git；
-- M0、reference engine、RawCapture 与 CaptureStore 已完成；下一步由 S-5.6 推进 immutable run artifacts，由 Argus 并行推进 #10/#11；
+- M0、reference engine、RawCapture、CaptureStore baseline 与 immutable run artifact v1 已完成；当前由 S-5.6 审查 #18 -> #19 -> #20 -> #16，并冻结周/月、DatasetRelease、application 和 artifact lineage 的共享契约；
+- 新增资深量化、公司行动、软件和 QA 人力按 `COLLABORATION_SCOPE.md` 在独占目录并行，不直接修改 Argus 的 active files；
 - QQQ 是 Nasdaq-100 ETF，不代表 Nasdaq Composite；若目标实际是 Nasdaq Composite，应把 QQQ 改为 ONEQ 并重新冻结 asset identity。
