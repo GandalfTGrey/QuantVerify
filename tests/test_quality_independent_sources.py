@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import TypeAlias
 
 import pytest
 
@@ -10,14 +11,18 @@ from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import AssetId
 from quantverify.data.models import NormalizedBar
 from quantverify.data.quality import (
+    CheckStatus,
     CrossSourceRequirement,
     EligibilityStatus,
     NormalizedInputRef,
     QualityEvidenceRef,
     QualityPolicy,
     QualitySourceData,
-    QualitySuite,
+    QualitySuite as PublicQualitySuite,
 )
+from quantverify.data.quality.suite import QualitySuite as DirectQualitySuite
+
+QualitySuiteType: TypeAlias = type[PublicQualitySuite]
 
 ASSET = AssetId(
     symbol="QQQ",
@@ -68,8 +73,12 @@ def source(provider: str, marker: str) -> QualitySourceData:
     )
 
 
-def evaluate(sources: list[QualitySourceData]):
-    return QualitySuite().evaluate(
+def evaluate(
+    sources: list[QualitySourceData],
+    *,
+    suite_type: QualitySuiteType = PublicQualitySuite,
+):
+    return suite_type().evaluate(
         asset=ASSET,
         frequency=BarFrequency.DAY,
         adjustment_mode=AdjustmentMode.RAW,
@@ -98,6 +107,14 @@ def test_two_current_captures_from_same_provider_are_not_independent_sources() -
         evaluate([first, second])
 
 
+def test_direct_module_import_cannot_bypass_independent_provider_invariant() -> None:
+    first = source("provider_a", "a")
+    second = source("provider_a", "b")
+
+    with pytest.raises(DataQualityError, match="independent providers"):
+        evaluate([first, second], suite_type=DirectQualitySuite)
+
+
 def test_two_distinct_providers_can_satisfy_required_verification() -> None:
     report = evaluate(
         [
@@ -107,11 +124,14 @@ def test_two_distinct_providers_can_satisfy_required_verification() -> None:
     )
 
     assert report.eligibility.status is EligibilityStatus.ELIGIBLE
+    assert tuple(evidence.provider for evidence in report.context.evidence_refs) == (
+        "provider_a",
+        "provider_b",
+    )
     coverage = next(
         result
         for result in report.check_results
         if result.check_id == "requested_range_coverage"
     )
-    assert coverage.metrics["source_authority_key"] == "provider"
-    assert coverage.metrics["independent_provider_count"] == 2
+    assert coverage.status is CheckStatus.PASS
     assert coverage.metrics["minimum_sources_per_session"] == 2
