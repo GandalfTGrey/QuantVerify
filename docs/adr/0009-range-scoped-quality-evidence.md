@@ -110,7 +110,9 @@ source semantics
 
 `QualitySourceData` 在正常构造路径下验证 `NormalizedInputRef.content_hash` 与实际 bars 一致；`QualitySuite.evaluate()` 会在公开计算边界再次重建 evidence/input envelope、重算完整 bars hash，并检查 session/timestamp/asset/source 的结构契约。测试中的 adversarial fixture 可以绕过上游 Pydantic 构造以产生 OHLC/volume finding，但不能绕过 A3 的内容 identity。
 
-A3 不允许通过 live provider 重新抓取数据，也不允许自行解析 CaptureStore 私有目录来补 lineage。它只消费已合并的 `CaptureStore.load_verified()` / `VerifiedCapture` 公共契约。
+A3 不允许通过 live provider 重新抓取数据，也不允许自行解析 CaptureStore 私有目录来补 lineage。生产入口必须携带已合并的 `CaptureStore.load_verified()` / `VerifiedCapture` 完整对象，而不是由调用方手填一组看似合法的 hash 字符串。A3 在 provenance adapter 与 suite 计算边界都会重新构造并校验 `VerifiedCapture`，然后从中派生 `QualityEvidenceRef`；unsafe `model_copy`、嵌套 manifest/license/capture 篡改或声明 evidence 不一致均 fail closed。
+
+测试可以通过显式 adversarial fixture 绕过 normalized bar 的上游构造，以验证质量检查本身；但不能绕过 verified raw lineage 后仍生成生产级 `ELIGIBLE` 报告。
 
 ### 5. Policy 内容 identity 与标签 identity 分离
 
@@ -187,7 +189,9 @@ Adjusted/derived series 的比较必须等到双方 adjustment semantics 可证�
 - check versions；
 - canonical findings/results。
 
-`report_id`、`finding_id`、`evidence_id`、`input_id` 与 policy `content_hash` 在计算前都重新验证完整模型；`DataQualityReportV2` 还会从 findings 重新推导 blocking/incomplete/warning ids 与 eligibility status。冻结模型内的 finding values 和 check metrics 使用递归 immutable mapping，避免对象创建后 identity 漂移。
+`report_id`、`finding_id`、`evidence_id`、`input_id` 与 policy `content_hash` 在计算前都重新验证完整模型；`DataQualityReportV2` 还会从 findings 重新推导 blocking/incomplete/warning ids 与 eligibility status，并绑定固定的 suite producer id/version、完整 check registry 与 report content hash。冻结模型内的 finding values 和 check metrics 使用递归 immutable mapping，避免对象创建后 identity 漂移。
+
+必须区分 **deterministic integrity** 与 **authenticity**：没有私钥或外部 append-only anchor 的 Pydantic/JSON DTO 无法证明“这个对象一定由某个函数创建”。因此，反序列化的 `DataQualityReportV2` 只是可携带的确定性证据 DTO，不能仅凭其自洽 hash 晋升为 A4 Gold 输入。任何下游 eligibility assertion 必须调用 `QualitySuite.verify_report(...)`，携带完整 `VerifiedCapture`、normalized bars、exact sessions、policy 与 revisions 重新运行 suite，并要求结果逐字段相等。A4 在该 replay gate 落地前保持阻塞；不得直接消费孤立报告中的 `eligibility=ELIGIBLE`。
 
 墙钟执行时间属于运行 metadata，不进入 scientific report identity。
 

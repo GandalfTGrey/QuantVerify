@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from quantverify.core.exceptions import DataQualityError
 from quantverify.data.models import NormalizedBar
 from quantverify.data.quality.identity import full_content_hash
 from quantverify.data.quality.models import (
@@ -22,6 +23,7 @@ def evidence_ref_from_verified_capture(verified: VerifiedCapture) -> QualityEvid
     already-verified public contract into the provider-independent A3 evidence model.
     """
 
+    verified = _revalidate_verified_capture(verified)
     manifest = verified.manifest
     return QualityEvidenceRef(
         capture_hash=manifest.capture_hash,
@@ -44,6 +46,7 @@ def quality_source_from_verified_capture(
 ) -> QualitySourceData:
     """Bind verified raw lineage and deterministic normalized-row identity together."""
 
+    verified = _revalidate_verified_capture(verified)
     immutable_bars = tuple(bars)
     normalized_input = NormalizedInputRef.from_bars(
         immutable_bars,
@@ -52,7 +55,15 @@ def quality_source_from_verified_capture(
         normalizer_version=normalizer_version,
     )
     return QualitySourceData(
+        verified_capture=verified,
         evidence=evidence_ref_from_verified_capture(verified),
         normalized_input=normalized_input,
         bars=immutable_bars,
     )
+
+
+def _revalidate_verified_capture(verified: VerifiedCapture) -> VerifiedCapture:
+    try:
+        return VerifiedCapture.model_validate(verified.model_dump(mode="python"))
+    except (AttributeError, TypeError, ValueError):
+        raise DataQualityError("verified capture failed provenance validation") from None

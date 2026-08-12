@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 from pydantic import ValidationError
@@ -9,20 +11,26 @@ from pydantic import ValidationError
 from quantverify.core.enums import AdjustmentMode, AssetClass, BarFrequency
 from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import AssetId
+from quantverify.data.capture import RawCapture
 from quantverify.data.models import NormalizedBar
 from quantverify.data.quality import (
+    CheckResult,
     CheckStatus,
     CrossSourceRequirement,
     DataQualityReportV2,
     EligibilityStatus,
     ExpectedSessionSetRef,
+    FindingSeverity,
     NormalizedInputRef,
-    QualityEvidenceRef,
+    QualityFinding,
     QualityPolicy,
     QualitySourceData,
     QualitySuite,
+    RangeEligibility,
     RevisionPair,
+    evidence_ref_from_verified_capture,
 )
+from quantverify.data.store import CaptureStore, DataLicenseProfile, VerifiedCapture
 
 ASSET = AssetId(
     symbol="QQQ",
@@ -31,6 +39,11 @@ ASSET = AssetId(
     currency="USD",
 )
 SUITE = QualitySuite()
+LICENSE = DataLicenseProfile(
+    profile_id="fixture-personal-research-v1",
+    permitted_uses=("local_research", "automated_testing"),
+    redistribution_allowed=False,
+)
 
 
 def bar(day: str, *, close: str = "100", source_name: str = "fixture") -> NormalizedBar:
@@ -51,22 +64,32 @@ def bar(day: str, *, close: str = "100", source_name: str = "fixture") -> Normal
     )
 
 
-def evidence(
+def verified_capture(
     provider: str,
     capture_char: str,
     manifest_char: str,
     *,
     request_char: str = "c",
-) -> QualityEvidenceRef:
-    return QualityEvidenceRef(
-        capture_hash=capture_char * 64,
-        manifest_hash=manifest_char * 64,
+) -> VerifiedCapture:
+    raw = RawCapture.from_records(
         provider=provider,
         endpoint="daily",
-        capture_schema_version="fixture-v1",
-        adapter_version="fixture-adapter-v1",
-        request_fingerprint=request_char * 64,
+        request={"semantic_request": request_char},
+        records=[{"capture_marker": capture_char}],
+        captured_at=datetime(2026, 1, 2, 22, tzinfo=UTC),
+        schema_version="fixture-v1",
     )
+    stored_offset = ord(manifest_char[0]) if manifest_char else 0
+    with TemporaryDirectory() as directory:
+        store = CaptureStore(Path(directory))
+        stored = store.write(
+            raw,
+            adapter_version="fixture-adapter-v1",
+            license_profile=LICENSE,
+            stored_at=datetime(2026, 1, 2, 22, tzinfo=UTC)
+            + timedelta(microseconds=stored_offset),
+        )
+        return store.load_verified(stored.manifest_path)
 
 
 def normalized_input(
@@ -107,13 +130,15 @@ def source(
 ) -> QualitySourceData:
     # Tests intentionally permit adversarial bars that bypass NormalizedBar's
     # boundary validation so QualitySuite defense-in-depth can be exercised.
+    verified = verified_capture(
+        provider,
+        capture_char,
+        manifest_char,
+        request_char=request_char,
+    )
     return QualitySourceData.model_construct(
-        evidence=evidence(
-            provider,
-            capture_char,
-            manifest_char,
-            request_char=request_char,
-        ),
+        verified_capture=verified,
+        evidence=evidence_ref_from_verified_capture(verified),
         normalized_input=normalized_input(
             bars,
             schema_version=schema_version,
@@ -167,7 +192,12 @@ def test_clean_report_has_fixed_identity_and_json_round_trip() -> None:
         end=session,
     )
 
-    assert report.report_id == "dqr_71aef4877a4c611703ec30a2"
+    assert report.context.quality_suite_id == "quantverify-quality-suite"
+    assert report.context.quality_suite_version == "2"
+    assert report.report_content_hash == (
+        "0b644aebd48b2bbfc1d1401db4b7c2ebdbe965bae74569d3b2587534448dfc6f"
+    )
+    assert report.report_id == "dqr_0a6e33a2b9607a603b5f2da2"
     replayed = DataQualityReportV2.model_validate_json(report.model_dump_json())
     assert replayed == report
     assert replayed.report_id == report.report_id
@@ -334,6 +364,30 @@ def test_exact_expected_session_set_has_content_identity() -> None:
     assert first.content_hash != second.content_hash
 
 
+def test_expected_session_identity_rejects_inconsistent_bounds() -> None:
+    with pytest.raises(ValidationError, match="empty session set"):
+        ExpectedSessionSetRef(
+            calendar_id="XNYS",
+            content_hash="a" * 64,
+            session_count=0,
+            first_session=date(2026, 1, 2),
+        )
+    with pytest.raises(ValidationError, match="requires date bounds"):
+        ExpectedSessionSetRef(
+            calendar_id="XNYS",
+            content_hash="a" * 64,
+            session_count=1,
+        )
+    with pytest.raises(ValidationError, match="bounds are invalid"):
+        ExpectedSessionSetRef(
+            calendar_id="XNYS",
+            content_hash="a" * 64,
+            session_count=2,
+            first_session=date(2026, 1, 5),
+            last_session=date(2026, 1, 2),
+        )
+
+
 def test_unsupported_normalized_schema_is_incomplete_for_requested_range() -> None:
     session = date(2026, 1, 2)
     data = source(
@@ -367,9 +421,11 @@ def test_normalized_input_ref_rejects_hash_mismatch() -> None:
         row_count=1,
     )
 
+    verified = verified_capture("source_a", "a", "b")
     with pytest.raises(ValidationError, match="content hash does not match"):
         QualitySourceData(
-            evidence=evidence("source_a", "a", "b"),
+            verified_capture=verified,
+            evidence=evidence_ref_from_verified_capture(verified),
             normalized_input=wrong_ref,
             bars=tuple(bars),
         )
@@ -574,6 +630,38 @@ def test_revision_is_evidence_and_policy_can_make_it_incomplete() -> None:
     )
 
 
+def test_revision_decimal_scale_is_one_scientific_value() -> None:
+    session = date(2026, 1, 2)
+    previous_bar = bar(session.isoformat())
+    current_bar = previous_bar.model_copy(
+        update={
+            "open": Decimal("100.0"),
+            "high": Decimal("110.00"),
+            "low": Decimal("90.000"),
+            "close": Decimal("100.0000"),
+            "volume": Decimal("1000000.00"),
+        }
+    )
+    previous = source("akshare", "a", "b", [previous_bar])
+    current = source("AKSHARE", "c", "d", [current_bar])
+    revision = RevisionPair(previous=previous, current=current)
+
+    report = evaluate(
+        [current],
+        [session],
+        start=session,
+        end=session,
+        revisions=(revision,),
+        policy=QualityPolicy(revision_blocks_requested_range=True),
+    )
+
+    assert report.eligibility.status is EligibilityStatus.ELIGIBLE
+    assert not any(
+        finding.finding_code == "provider_history_revision"
+        for finding in report.findings
+    )
+
+
 def test_source_order_does_not_change_report_identity() -> None:
     session = date(2026, 1, 2)
     left = source("source_a", "a", "b", [bar(session.isoformat())])
@@ -693,6 +781,44 @@ def test_quality_input_identity_rejects_unsafe_model_copies() -> None:
         )
 
 
+def test_verified_capture_adapter_revalidates_top_level_and_nested_models() -> None:
+    verified = verified_capture("akshare", "a", "b")
+    invalid_license = verified.manifest.license_profile.model_copy(
+        update={"profile_id": ""}
+    )
+    invalid_manifest = verified.manifest.model_copy(
+        update={"license_profile": invalid_license}
+    )
+    invalid_capture = verified.capture.model_copy(update={"provider": ""})
+    unsafe_values = (
+        verified.model_copy(update={"manifest_hash": "f" * 64}),
+        verified.model_copy(update={"manifest": invalid_manifest}),
+        verified.model_copy(update={"capture": invalid_capture}),
+    )
+
+    for unsafe in unsafe_values:
+        with pytest.raises(
+            DataQualityError, match="verified capture failed provenance validation"
+        ):
+            evidence_ref_from_verified_capture(unsafe)
+
+
+def test_evaluation_rejects_declared_evidence_not_derived_from_capture() -> None:
+    session = date(2026, 1, 2)
+    valid_source = source("akshare", "a", "b", [bar(session.isoformat())])
+    false_evidence = valid_source.evidence.model_copy(
+        update={"manifest_hash": "f" * 64}
+    )
+
+    with pytest.raises(DataQualityError, match="must derive from its VerifiedCapture"):
+        evaluate(
+            [valid_source.model_copy(update={"evidence": false_evidence})],
+            [session],
+            start=session,
+            end=session,
+        )
+
+
 def test_report_identity_rejects_semantically_inconsistent_eligibility_copy() -> None:
     session = date(2026, 1, 2)
     corrupted = bar(session.isoformat()).model_copy(update={"low": Decimal("120")})
@@ -718,6 +844,168 @@ def test_report_identity_rejects_semantically_inconsistent_eligibility_copy() ->
     )
     with pytest.raises(ValidationError, match="exact A3 v1 check registry"):
         _ = incomplete_registry.report_id
+
+
+def test_check_status_cannot_contradict_findings() -> None:
+    session = date(2026, 1, 2)
+    corrupted = bar(session.isoformat()).model_copy(update={"low": Decimal("120")})
+    report = evaluate(
+        [source("akshare", "a", "b", [corrupted])],
+        [session],
+        start=session,
+        end=session,
+    )
+    failed = next(result for result in report.check_results if result.findings)
+
+    with pytest.raises(ValidationError, match="status is inconsistent"):
+        CheckResult.model_validate(
+            failed.model_copy(update={"status": CheckStatus.PASS}).model_dump(
+                mode="python"
+            )
+        )
+    clean = next(result for result in report.check_results if not result.findings)
+    with pytest.raises(ValidationError, match="empty quality check"):
+        CheckResult.model_validate(
+            clean.model_copy(update={"status": CheckStatus.FAIL}).model_dump(
+                mode="python"
+            )
+        )
+    informational = QualityFinding(
+        check_id="fixture",
+        check_version="2",
+        severity=FindingSeverity.INFO,
+        finding_code="fixture_information",
+        affected_start=session,
+        affected_end=session,
+        message="fixture informational evidence",
+    )
+    info_result = CheckResult(
+        check_id="fixture",
+        check_version="2",
+        status=CheckStatus.PASS,
+        findings=(informational,),
+    )
+    assert info_result.status is CheckStatus.PASS
+
+
+def test_report_and_context_identity_boundaries_fail_closed() -> None:
+    session = date(2026, 1, 2)
+    report = evaluate(
+        [source("akshare", "a", "b", [bar(session.isoformat())])],
+        [session],
+        start=session,
+        end=session,
+    )
+    invalid_contexts = (
+        report.context.model_copy(update={"quality_suite_version": "999"}),
+        report.context.model_copy(
+            update={"requested_start": date(2026, 1, 3)}
+        ),
+        report.context.model_copy(update={"observed_start": date(2026, 1, 3)}),
+        report.context.model_copy(update={"calendar_id": "ARCX"}),
+        report.context.model_copy(update={"normalized_input_refs": ()}),
+    )
+    for context in invalid_contexts:
+        with pytest.raises(ValidationError):
+            _ = report.model_copy(update={"context": context}).report_id
+
+    invalid_reports = (
+        report.model_copy(update={"policy_id": "different-policy"}),
+        report.model_copy(update={"policy_version": "999"}),
+        report.model_copy(
+            update={
+                "eligibility": report.eligibility.model_copy(
+                    update={"requested_end": date(2026, 1, 3)}
+                )
+            }
+        ),
+        report.model_copy(update={"report_content_hash": "f" * 64}),
+    )
+    for candidate in invalid_reports:
+        with pytest.raises(ValidationError):
+            _ = candidate.report_id
+
+    invalid_range = report.eligibility.model_copy(
+        update={
+            "requested_start": date(2026, 1, 3),
+            "requested_end": date(2026, 1, 2),
+        }
+    )
+    with pytest.raises(ValidationError, match="eligibility range"):
+        type(report.eligibility).model_validate(invalid_range.model_dump(mode="python"))
+
+
+def test_fully_rehashed_forged_report_fails_input_closure_replay() -> None:
+    session = date(2026, 1, 2)
+    corrupted = bar(session.isoformat()).model_copy(update={"low": Decimal("120")})
+    data = source("akshare", "a", "b", [corrupted])
+    actual = evaluate([data], [session], start=session, end=session)
+    forged_results = tuple(
+        CheckResult(
+            check_id=result.check_id,
+            check_version=result.check_version,
+            status=(
+                CheckStatus.NOT_APPLICABLE
+                if result.status is CheckStatus.NOT_APPLICABLE
+                else CheckStatus.PASS
+            ),
+            findings=(),
+            metrics=result.metrics,
+        )
+        for result in actual.check_results
+    )
+    forged = DataQualityReportV2.from_evaluation(
+        context=actual.context,
+        policy_id=actual.policy_id,
+        policy_version=actual.policy_version,
+        check_results=forged_results,
+        eligibility=RangeEligibility(
+            requested_start=session,
+            requested_end=session,
+            status=EligibilityStatus.ELIGIBLE,
+        ),
+    )
+    assert forged.eligibility.status is EligibilityStatus.ELIGIBLE
+
+    unsafe = actual.model_copy(update={"report_content_hash": "f" * 64})
+    with pytest.raises(DataQualityError, match="report failed integrity validation"):
+        SUITE.verify_report(
+            unsafe,
+            asset=ASSET,
+            frequency=BarFrequency.DAY,
+            adjustment_mode=AdjustmentMode.RAW,
+            calendar_id="XNYS",
+            requested_start=session,
+            requested_end=session,
+            sources=(data,),
+            expected_sessions=(session,),
+        )
+
+    with pytest.raises(DataQualityError, match="does not match deterministic"):
+        SUITE.verify_report(
+            forged,
+            asset=ASSET,
+            frequency=BarFrequency.DAY,
+            adjustment_mode=AdjustmentMode.RAW,
+            calendar_id="XNYS",
+            requested_start=session,
+            requested_end=session,
+            sources=(data,),
+            expected_sessions=(session,),
+        )
+
+    verified = SUITE.verify_report(
+        actual,
+        asset=ASSET,
+        frequency=BarFrequency.DAY,
+        adjustment_mode=AdjustmentMode.RAW,
+        calendar_id="XNYS",
+        requested_start=session,
+        requested_end=session,
+        sources=(data,),
+        expected_sessions=(session,),
+    )
+    assert verified == actual
 
 
 def test_structurally_invalid_bar_fails_before_quality_conclusions() -> None:
@@ -819,9 +1107,21 @@ def test_public_evaluation_rejects_untyped_range_calendar_and_adjustment() -> No
     }
     invalid_inputs = (
         {"requested_start": "2026-01-02"},
+        {"requested_start": date(2026, 1, 3)},
+        {"sources": ()},
+        {"frequency": "1d"},
         {"calendar_id": ""},
         {"adjustment_mode": "raw"},
         {"expected_sessions": ("2026-01-02",)},
+        {"asset": ASSET.model_copy(update={"venue": ""})},
+        {
+            "policy": QualityPolicy().model_copy(
+                update={
+                    "price_pass_tolerance_bps": Decimal("100"),
+                    "price_warning_tolerance_bps": Decimal("10"),
+                }
+            )
+        },
     )
     for override in invalid_inputs:
         with pytest.raises(DataQualityError):

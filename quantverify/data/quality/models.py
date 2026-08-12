@@ -15,7 +15,12 @@ from quantverify.core.identity import canonicalize, stable_hash
 from quantverify.core.models import AssetId, DomainModel
 from quantverify.data.capture import FrozenMapping
 from quantverify.data.models import NormalizedBar
-from quantverify.data.quality.identity import expected_sessions_hash, normalized_bars_hash
+from quantverify.data.quality.identity import (
+    expected_sessions_hash,
+    full_content_hash,
+    normalized_bars_hash,
+)
+from quantverify.data.store import VerifiedCapture
 
 INELIGIBLE_FINDING_CODES = frozenset(
     {
@@ -51,6 +56,8 @@ REQUIRED_CHECK_IDS = (
     "provider_revision",
     "adjustment_semantics",
 )
+QUALITY_SUITE_ID = "quantverify-quality-suite"
+QUALITY_SUITE_VERSION = "2"
 
 
 class FindingSeverity(StrEnum):
@@ -162,12 +169,20 @@ class ExpectedSessionSetRef(DomainModel):
 class QualitySourceData(DomainModel):
     """One offline normalized source plus raw and normalized lineage identities."""
 
+    verified_capture: VerifiedCapture
     evidence: QualityEvidenceRef
     normalized_input: NormalizedInputRef
     bars: tuple[NormalizedBar, ...]
 
     @model_validator(mode="after")
     def validate_source(self) -> QualitySourceData:
+        from quantverify.data.quality.provenance import (  # avoid module import cycle
+            evidence_ref_from_verified_capture,
+        )
+
+        expected_evidence = evidence_ref_from_verified_capture(self.verified_capture)
+        if self.evidence != expected_evidence:
+            raise ValueError("quality evidence must derive from its VerifiedCapture")
         if self.bars:
             asset = self.bars[0].asset
             if any(bar.asset != asset for bar in self.bars):
@@ -190,12 +205,12 @@ class RevisionPair(DomainModel):
         previous = self.previous.evidence
         current = self.current.evidence
         identity = (
-            previous.provider,
+            previous.provider.casefold(),
             previous.endpoint,
             previous.request_fingerprint,
         )
         current_identity = (
-            current.provider,
+            current.provider.casefold(),
             current.endpoint,
             current.request_fingerprint,
         )
@@ -248,6 +263,10 @@ class RevisionInputRef(DomainModel):
 
 
 class QualityEvaluationContext(DomainModel):
+    quality_suite_id: str = Field(default=QUALITY_SUITE_ID, min_length=1, max_length=64)
+    quality_suite_version: str = Field(
+        default=QUALITY_SUITE_VERSION, min_length=1, max_length=32
+    )
     asset: AssetId
     frequency: BarFrequency
     adjustment_mode: AdjustmentMode
@@ -267,6 +286,11 @@ class QualityEvaluationContext(DomainModel):
 
     @model_validator(mode="after")
     def validate_context(self) -> QualityEvaluationContext:
+        if (
+            self.quality_suite_id != QUALITY_SUITE_ID
+            or self.quality_suite_version != QUALITY_SUITE_VERSION
+        ):
+            raise ValueError("quality suite producer identity is unsupported")
         if self.requested_start > self.requested_end:
             raise ValueError("requested_start must not be later than requested_end")
         if self.observed_start > self.observed_end:
@@ -349,6 +373,27 @@ class CheckResult(DomainModel):
     @model_validator(mode="after")
     def validate_metrics(self) -> CheckResult:
         canonicalize(self.metrics)
+        if not self.findings:
+            if self.status not in (CheckStatus.PASS, CheckStatus.NOT_APPLICABLE):
+                raise ValueError("empty quality check must pass or be not applicable")
+            return self
+        hard_codes = {
+            finding.finding_code
+            for finding in self.findings
+            if finding.severity in (FindingSeverity.ERROR, FindingSeverity.BLOCKER)
+        }
+        if hard_codes - INCOMPLETE_FINDING_CODES:
+            expected_status = CheckStatus.FAIL
+        elif hard_codes:
+            expected_status = CheckStatus.INCOMPLETE
+        elif any(
+            finding.severity is FindingSeverity.WARNING for finding in self.findings
+        ):
+            expected_status = CheckStatus.WARNING
+        else:
+            expected_status = CheckStatus.PASS
+        if self.status is not expected_status:
+            raise ValueError("quality check status is inconsistent with its findings")
         return self
 
 
@@ -373,6 +418,29 @@ class DataQualityReportV2(DomainModel):
     policy_version: str = Field(min_length=1, max_length=64)
     check_results: tuple[CheckResult, ...]
     eligibility: RangeEligibility
+    report_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @classmethod
+    def from_evaluation(
+        cls,
+        *,
+        context: QualityEvaluationContext,
+        policy_id: str,
+        policy_version: str,
+        check_results: tuple[CheckResult, ...],
+        eligibility: RangeEligibility,
+    ) -> DataQualityReportV2:
+        payload = {
+            "context": context,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "check_results": check_results,
+            "eligibility": eligibility,
+        }
+        return cls(
+            **payload,
+            report_content_hash=full_content_hash(payload),
+        )
 
     @model_validator(mode="after")
     def validate_policy_and_range(self) -> DataQualityReportV2:
@@ -422,6 +490,17 @@ class DataQualityReportV2(DomainModel):
         )
         if self.eligibility.status is not expected_status:
             raise ValueError("eligibility status is inconsistent with findings")
+        expected_content_hash = full_content_hash(
+            {
+                "context": self.context,
+                "policy_id": self.policy_id,
+                "policy_version": self.policy_version,
+                "check_results": self.check_results,
+                "eligibility": self.eligibility,
+            }
+        )
+        if self.report_content_hash != expected_content_hash:
+            raise ValueError("quality report content hash does not match its evidence")
         return self
 
     def _expected_eligibility_ids(

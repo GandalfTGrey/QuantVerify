@@ -33,6 +33,7 @@ from quantverify.data.quality.models import (
     RevisionPair,
 )
 from quantverify.data.quality.policy import QualityPolicy
+from quantverify.data.quality.provenance import evidence_ref_from_verified_capture
 
 _CHECK_VERSION = "2"
 _PRICE_FIELDS = ("open", "high", "low", "close")
@@ -40,6 +41,47 @@ _PRICE_FIELDS = ("open", "high", "low", "close")
 
 class QualitySuite:
     """Evaluate captured and normalized market data without provider access."""
+
+    def verify_report(
+        self,
+        report: DataQualityReportV2,
+        *,
+        asset: AssetId,
+        frequency: BarFrequency,
+        adjustment_mode: AdjustmentMode,
+        calendar_id: str,
+        requested_start: date,
+        requested_end: date,
+        sources: Sequence[QualitySourceData],
+        expected_sessions: Sequence[date],
+        policy: QualityPolicy | None = None,
+        revisions: Sequence[RevisionPair] = (),
+    ) -> DataQualityReportV2:
+        """Re-run the full input closure before a downstream consumer trusts a report."""
+
+        try:
+            candidate = DataQualityReportV2.model_validate(
+                report.model_dump(mode="python")
+            )
+        except (AttributeError, TypeError, ValueError):
+            raise DataQualityError("quality report failed integrity validation") from None
+        expected = self.evaluate(
+            asset=asset,
+            frequency=frequency,
+            adjustment_mode=adjustment_mode,
+            calendar_id=calendar_id,
+            requested_start=requested_start,
+            requested_end=requested_end,
+            sources=sources,
+            expected_sessions=expected_sessions,
+            policy=policy,
+            revisions=revisions,
+        )
+        if candidate != expected:
+            raise DataQualityError(
+                "quality report does not match deterministic evaluation inputs"
+            )
+        return expected
 
     def evaluate(
         self,
@@ -175,7 +217,7 @@ class QualitySuite:
             requested_end=requested_end,
             policy=active_policy,
         )
-        return DataQualityReportV2(
+        return DataQualityReportV2.from_evaluation(
             context=context,
             policy_id=active_policy.policy_id,
             policy_version=active_policy.version,
@@ -203,7 +245,9 @@ class QualitySuite:
         source: QualitySourceData,
     ) -> QualitySourceData:
         try:
-            evidence = QualityEvidenceRef.model_validate(
+            verified_capture = source.verified_capture
+            evidence = evidence_ref_from_verified_capture(verified_capture)
+            declared_evidence = QualityEvidenceRef.model_validate(
                 source.evidence.model_dump(mode="python")
             )
             normalized_input = NormalizedInputRef.model_validate(
@@ -212,6 +256,8 @@ class QualitySuite:
             bars = tuple(source.bars)
         except (AttributeError, TypeError, ValueError):
             raise DataQualityError("quality source failed integrity validation") from None
+        if declared_evidence != evidence:
+            raise DataQualityError("quality evidence must derive from its VerifiedCapture")
         if not all(isinstance(bar, NormalizedBar) for bar in bars):
             raise DataQualityError("quality source bars must be NormalizedBar instances")
         for bar in bars:
@@ -227,6 +273,7 @@ class QualitySuite:
         if normalized_input.content_hash != content_hash:
             raise DataQualityError("normalized input content hash does not match bars")
         return QualitySourceData.model_construct(
+            verified_capture=verified_capture,
             evidence=evidence,
             normalized_input=normalized_input,
             bars=bars,
@@ -1015,7 +1062,7 @@ class QualitySuite:
         return [
             field
             for field in (*_PRICE_FIELDS, "volume")
-            if str(getattr(previous, field)) != str(getattr(current, field))
+            if getattr(previous, field) != getattr(current, field)
         ]
 
     @staticmethod

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TypeAlias
 
 import pytest
@@ -9,18 +11,19 @@ import pytest
 from quantverify.core.enums import AdjustmentMode, AssetClass, BarFrequency
 from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import AssetId
+from quantverify.data.capture import RawCapture
 from quantverify.data.models import NormalizedBar
 from quantverify.data.quality import (
     CheckStatus,
     CrossSourceRequirement,
     EligibilityStatus,
-    NormalizedInputRef,
-    QualityEvidenceRef,
     QualityPolicy,
     QualitySourceData,
+    quality_source_from_verified_capture,
 )
 from quantverify.data.quality import QualitySuite as PublicQualitySuite
 from quantverify.data.quality.suite import QualitySuite as DirectQualitySuite
+from quantverify.data.store import CaptureStore, DataLicenseProfile
 
 QualitySuiteType: TypeAlias = type[PublicQualitySuite]
 
@@ -31,6 +34,11 @@ ASSET = AssetId(
     currency="USD",
 )
 SESSION = date(2026, 1, 2)
+LICENSE = DataLicenseProfile(
+    profile_id="fixture-personal-research-v1",
+    permitted_uses=("automated_testing",),
+    redistribution_allowed=False,
+)
 
 
 def bar(provider: str) -> NormalizedBar:
@@ -51,25 +59,29 @@ def bar(provider: str) -> NormalizedBar:
 
 def source(provider: str, marker: str) -> QualitySourceData:
     bars = (bar(provider),)
-    evidence = QualityEvidenceRef(
-        capture_hash=marker * 64,
-        manifest_hash=("f" if marker != "f" else "e") * 64,
+    capture = RawCapture.from_records(
         provider=provider,
         endpoint="daily",
-        capture_schema_version="fixture-daily-v1",
-        adapter_version="fixture-adapter-v1",
-        request_fingerprint=("d" if marker != "d" else "c") * 64,
+        request={"symbol": "QQQ", "adjust": "raw"},
+        records=[{"marker": marker}],
+        captured_at=datetime(2026, 1, 2, 22, tzinfo=UTC),
+        schema_version="fixture-daily-v1",
     )
-    normalized = NormalizedInputRef.from_bars(
+    with TemporaryDirectory() as directory:
+        store = CaptureStore(Path(directory))
+        stored = store.write(
+            capture,
+            adapter_version="fixture-adapter-v1",
+            license_profile=LICENSE,
+            stored_at=datetime(2026, 1, 2, 22, 1, tzinfo=UTC),
+        )
+        verified = store.load_verified(stored.manifest_path)
+    return quality_source_from_verified_capture(
+        verified,
         bars,
         schema_version="normalized-bar-v1",
         normalizer_id="fixture-normalizer",
         normalizer_version="1.0.0",
-    )
-    return QualitySourceData(
-        evidence=evidence,
-        normalized_input=normalized,
-        bars=bars,
     )
 
 
