@@ -1,6 +1,6 @@
 # ADR-0012：Fixture Application Command、Identity 与 Handler 边界
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-12
 - Owner / Reviewer: S-5.6 / Dev-Lead、QA-Lead
 - Depends on: ADR-0003, ADR-0008, ADR-0011
@@ -93,4 +93,4 @@ SW-03 必须提供显式 registry、immutable fixture bundle、ordered bars 和 
 
 ## Review Gate
 
-ADR 在 contract PR 通过 S-5.6、Dev-Lead 与独立 QA 对抗 review 后才能改为 `Accepted`。
+本 ADR 已通过 S-5.6、Dev-Lead 与独立 QA 对抗 review。CORE-05B 和 CORE-06 必须继续执行本文的延期门禁；Accepted 不代表 fixture run 或 CLI 已可用。
