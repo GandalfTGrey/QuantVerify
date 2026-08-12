@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 
@@ -16,22 +19,125 @@ from quantverify.core.identity import canonicalize
 from quantverify.core.models import DomainModel
 from quantverify.data.capture import FrozenMapping, RawCapture
 
-_CREDENTIAL_KEYS = frozenset(
+_CREDENTIAL_TOKENS = frozenset(
     {
-        "access_token",
-        "api_key",
-        "apikey",
+        "auth",
+        "authentication",
         "authorization",
-        "client_secret",
+        "bearer",
         "cookie",
         "cookies",
+        "credential",
+        "credentials",
         "password",
         "passwd",
-        "private_key",
         "secret",
+        "signature",
         "token",
     }
 )
+_CREDENTIAL_COMPACT_KEYS = frozenset(
+    {
+        "accesskey",
+        "accesskeyid",
+        "accesstoken",
+        "appkey",
+        "appsecret",
+        "apikey",
+        "authtoken",
+        "clientsecret",
+        "consumerkey",
+        "encryptionkey",
+        "functionskey",
+        "privatekey",
+        "refreshtoken",
+        "secretaccesskey",
+        "secretkey",
+        "securitytoken",
+        "sessiontoken",
+        "signingkey",
+        "subscriptionkey",
+    }
+)
+_CREDENTIAL_COMPACT_SUFFIXES = _CREDENTIAL_COMPACT_KEYS | frozenset(
+    {
+        "authorization",
+        "credential",
+        "passwd",
+        "password",
+        "secret",
+        "signature",
+        "token",
+    }
+)
+_CREDENTIAL_KEY_QUALIFIERS = frozenset(
+    {
+        "access",
+        "api",
+        "apim",
+        "app",
+        "aws",
+        "azure",
+        "consumer",
+        "encryption",
+        "functions",
+        "oauth",
+        "oauth2",
+        "private",
+        "secret",
+        "service",
+        "signing",
+        "subscription",
+    }
+)
+
+
+def _decode_request_key(key: str) -> str:
+    """Normalize common transport encodings without inspecting request values."""
+
+    decoded = key
+    # NFKC may expose a percent escape, while percent decoding may expose new
+    # compatibility characters. Iterate the composition to one joint fixed point.
+    # Effective percent passes shorten the finite input; NFKC is idempotent after
+    # each newly decoded layer, so this input-sized work bound is fail-closed.
+    for _ in range(max(4, len(key) * 2 + 1)):
+        next_value = unquote(unicodedata.normalize("NFKC", decoded))
+        if next_value == decoded:
+            return decoded
+        decoded = next_value
+    # Defensive fail-closed sentinel; this should be unreachable for urllib's
+    # non-expanding unquote implementation.
+    return "credential"
+
+
+def _credential_key_tokens(key: str) -> tuple[str, ...]:
+    """Split a request key into case-folded semantic tokens."""
+
+    decoded = _decode_request_key(key)
+    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", decoded)
+    acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", camel_split)
+    return tuple(
+        re.sub(r"\d+$", "", token)
+        for token in re.split(r"[^A-Za-z0-9]+", acronym_split.casefold())
+        if re.sub(r"\d+$", "", token)
+    )
+
+
+def _is_credential_key(key: str) -> bool:
+    tokens = _credential_key_tokens(key)
+    if not tokens:
+        return False
+    token_set = set(tokens)
+    compact = "".join(tokens)
+    if token_set & _CREDENTIAL_TOKENS:
+        return True
+    if token_set & _CREDENTIAL_COMPACT_KEYS:
+        return True
+    if any(compact.endswith(candidate) for candidate in _CREDENTIAL_COMPACT_SUFFIXES):
+        return True
+    if "key" not in token_set:
+        return False
+    return len(tokens) == 1 or bool(token_set & _CREDENTIAL_KEY_QUALIFIERS)
 
 
 class DataLicenseProfile(DomainModel):
@@ -113,8 +219,13 @@ class CaptureStore:
         """Persist capture content once and one manifest per observation event."""
 
         observation_stored_at = stored_at or datetime.now(UTC)
-        if observation_stored_at.tzinfo is None:
+        if not isinstance(observation_stored_at, datetime) or (
+            observation_stored_at.tzinfo is None
+        ):
             raise ReproducibilityError("stored_at must be timezone-aware")
+
+        capture = self._revalidate_capture(capture)
+        license_profile = self._revalidate_license_profile(license_profile)
         self._reject_credentials(capture.request)
 
         content = capture.content_bytes()
@@ -129,25 +240,30 @@ class CaptureStore:
             / f"{content_hash}.json"
         )
         content_path = self._resolve_relative(content_relative)
-        self._write_immutable(content_path, content, "capture content")
 
         document = capture.content_document()
         request = document.get("request")
         if not isinstance(request, dict):
             raise ReproducibilityError("RawCapture request did not serialize as a mapping")
-        manifest = CaptureManifest(
-            capture_hash=content_hash,
-            provider=capture.provider,
-            endpoint=capture.endpoint,
-            request=request,
-            capture_schema_version=capture.schema_version,
-            adapter_version=adapter_version,
-            captured_at=capture.captured_at,
-            stored_at=observation_stored_at,
-            record_count=len(capture.records),
-            content_path=content_relative.as_posix(),
-            license_profile=license_profile,
-        )
+        try:
+            validated_manifest: CaptureManifest | None = CaptureManifest(
+                capture_hash=content_hash,
+                provider=capture.provider,
+                endpoint=capture.endpoint,
+                request=request,
+                capture_schema_version=capture.schema_version,
+                adapter_version=adapter_version,
+                captured_at=capture.captured_at,
+                stored_at=observation_stored_at,
+                record_count=len(capture.records),
+                content_path=content_relative.as_posix(),
+                license_profile=license_profile,
+            )
+        except (TypeError, ValueError):
+            validated_manifest = None
+        if validated_manifest is None:
+            raise ReproducibilityError("Capture manifest failed integrity validation")
+        manifest = validated_manifest
         manifest_content = self._serialize(manifest.model_dump(mode="json"))
         manifest_hash = hashlib.sha256(manifest_content).hexdigest()
         capture_stamp = capture.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -158,13 +274,18 @@ class CaptureStore:
             / f"{capture_stamp}-{manifest_hash}.json"
         )
         manifest_path = self._resolve_relative(manifest_relative)
-        self._write_immutable(manifest_path, manifest_content, "capture manifest")
-        return StoredCapture(
+        stored = StoredCapture(
             manifest=manifest,
             manifest_hash=manifest_hash,
             content_path=content_relative.as_posix(),
             manifest_path=manifest_relative.as_posix(),
         )
+
+        # All validation and canonical serialization must succeed before the first
+        # filesystem mutation. Crash-safe publication is a separate DATA-01 step.
+        self._write_immutable(content_path, content, "capture content")
+        self._write_immutable(manifest_path, manifest_content, "capture manifest")
+        return stored
 
     def load(self, manifest_path: str | Path) -> RawCapture:
         """Verify and reconstruct a capture from a persisted manifest."""
@@ -217,19 +338,49 @@ class CaptureStore:
         return resolved
 
     @classmethod
-    def _reject_credentials(cls, value: Any, path: str = "request") -> None:
+    def _reject_credentials(cls, value: Any) -> None:
         if isinstance(value, Mapping):
             for key, item in value.items():
-                normalized_key = key.lower().replace("-", "_")
-                item_path = f"{path}.{key}"
-                if normalized_key in _CREDENTIAL_KEYS:
+                if _is_credential_key(key):
                     raise ReproducibilityError(
-                        f"Capture request contains prohibited credential field: {item_path}"
+                        "Capture request contains prohibited credential field"
                     )
-                cls._reject_credentials(item, item_path)
+                cls._reject_credentials(item)
         elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            for index, item in enumerate(value):
-                cls._reject_credentials(item, f"{path}[{index}]")
+            for item in value:
+                cls._reject_credentials(item)
+
+    @staticmethod
+    def _revalidate_capture(capture: RawCapture) -> RawCapture:
+        try:
+            payload = {
+                field_name: getattr(capture, field_name)
+                for field_name in RawCapture.model_fields
+            }
+            validated_capture: RawCapture | None = RawCapture.model_validate(payload)
+        except (AttributeError, TypeError, ValueError):
+            validated_capture = None
+        if validated_capture is None:
+            raise ReproducibilityError("RawCapture failed integrity validation")
+        return validated_capture
+
+    @staticmethod
+    def _revalidate_license_profile(
+        license_profile: DataLicenseProfile,
+    ) -> DataLicenseProfile:
+        try:
+            payload = {
+                field_name: getattr(license_profile, field_name)
+                for field_name in DataLicenseProfile.model_fields
+            }
+            validated_profile: DataLicenseProfile | None = (
+                DataLicenseProfile.model_validate(payload)
+            )
+        except (AttributeError, TypeError, ValueError):
+            validated_profile = None
+        if validated_profile is None:
+            raise ReproducibilityError("DataLicenseProfile failed integrity validation")
+        return validated_profile
 
     @staticmethod
     def _write_immutable(path: Path, content: bytes, label: str) -> None:

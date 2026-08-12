@@ -163,7 +163,7 @@ class CaptureStoreTests(TestCase):
         with TemporaryDirectory() as directory:
             store = CaptureStore(Path(directory))
             with self.assertRaisesRegex(
-                ReproducibilityError, "prohibited credential field: request.auth.api-key"
+                ReproducibilityError, "prohibited credential field"
             ):
                 store.write(
                     unsafe_capture,
