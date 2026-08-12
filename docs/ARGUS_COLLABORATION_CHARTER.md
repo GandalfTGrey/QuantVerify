@@ -5,6 +5,7 @@
 > Scope: research correctness, market-data engineering, experiment reproducibility, validation architecture, and code review
 > Status: Active working agreement
 > First adopted: 2026-08-10
+> Last reviewed: 2026-08-12
 
 ## 1. 为什么叫 Argus
 
@@ -158,7 +159,7 @@ Bronze/raw 层优先保留 provider-native 信息。不得为了方便 normalize
 
 真实市场数据质量 gate 与 reference-engine correctness gate 分离。真实 QQQ/DIA 冲突不能阻塞 fixture 驱动的 engine validation。
 
-### A1 — Raw Capture -> Normalize Boundary（已完成，待集成）
+### A1 — Raw Capture -> Normalize Boundary（已完成并集成）
 
 目标：一次 provider fetch 产生唯一 capture；raw snapshot 和 normalized data 来自同一对象。
 
@@ -170,29 +171,31 @@ Bronze/raw 层优先保留 provider-native 信息。不得为了方便 normalize
 - snapshot manifest 可指向该 capture；
 - regression test 证明不能出现“保存 A、回测 B”。
 
-实现位于 Argus PR #7，T-5.6 PR #8 完成嵌套不可变性和 schema drift 审查。
+原始实现位于 Argus PR #7，T-5.6 PR #8 完成嵌套不可变性和 schema drift 审查；能力现已进入 `main`。
 
-### A2 — Provider-agnostic Capture Manifest（已完成，待独立审计）
+### A2 — Provider-agnostic Capture Manifest（已进入 main，hardening 进行中）
 
 将当前 AkShare-specific snapshot writer 重构为通用 CaptureStore，记录 request、provider/adapter version、capture timestamp、schema/hash 和许可 profile。
 
-实现位于 T-5.6 PR #9；独立对抗审计由 Argus Issue #11 跟踪。完成实现不等于已证明并发写入与崩溃恢复安全。
+基础实现源自 T-5.6 PR #9；独立对抗审计由 Argus Issue #11 跟踪，当前按 #18 -> #19 -> #20 处理 secret guard、atomic publish 和 verified replay。完成基础实现不等于已证明并发写入与崩溃恢复安全。
 
-### A3 — Quality Suite v2（已分配）
+### A3 — Quality Suite v2（Argus Owner）
 
 把 close-only cross-source validator 拆成 schema/calendar/coverage/OHLC/revision/cross-source/corporate-action 等模块化检查。
 
 详细验收边界由 Argus Issue #10 跟踪。交付必须绑定 capture/manifest identity、支持区间级准入并可完全离线复现。
 
-### A4 — Dataset Release + Range-scoped Eligibility
+### A4 — Dataset Release + Range-scoped Eligibility（Argus Owner，等待 A3）
 
 建立 research-ready release，对质量区间建模，并在 experiment preflight 中判断所请求时间范围是否允许研究。
 
-### A5 — Corporate Action / Adjustment Pipeline
+### A5 — Corporate Action / Adjustment Pipeline（CA-Lead Owner，Argus Reviewer）
 
 将 corporate action 建成一级实体，分离 raw trading price、split-adjusted series 和 total-return series。
 
-### A6 — Data source expansion
+Argus 负责 point-in-time、数据证据和收益语义复核，不同时承担实现 Owner。该调整用于消除 A3/A4 的串行瓶颈；具体文件边界和验收条件见 `COLLABORATION_SCOPE.md` 的 CA-01。
+
+### A6 — Data source expansion（Deferred）
 
 在基础 contract 稳定后再增加 provider。Tushare 美股当前不可用时不作为阻塞项。候选源按 coverage / verification / adjudication / official-anchor 角色管理，而不是盲目固定 primary/secondary。
 
@@ -223,3 +226,5 @@ Argus 负责的功能只有在以下条件基本满足后才视为完成：
 - 对后续 provider / strategy 扩展不制造明显耦合。
 
 本文件是活文档。重大角色、质量标准或协作规则变化应通过 PR 讨论和版本历史保留，不静默重写。
+
+当前执行工作包、WIP 和合并顺序不在本 Charter 重复维护，以 `COLLABORATION_SCOPE.md` 和 GitHub Issue #14 为准。
