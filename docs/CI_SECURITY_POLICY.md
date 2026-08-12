@@ -1,7 +1,7 @@
 # CI 与依赖更新政策
 
-> Status: Active  
-> Owner: S-5.6  
+> Status: Active
+> Owner: S-5.6
 > Operational tracker: GitHub Issue #26
 
 ## 1. 适用范围
