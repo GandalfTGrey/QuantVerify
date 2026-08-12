@@ -249,10 +249,17 @@ class MetricsV1GoldenTests(TestCase):
             )
         with self.assertRaises(ValidationError):
             EquityObservation(observed_on=date(2024, 1, 1), equity=Decimal("-0.01"))
-        with self.assertRaisesRegex(ValueError, "initial equity"):
+        with self.assertRaisesRegex(ValueError, "non-terminal equity"):
             total_return((Decimal("0"), Decimal("100")))
-        with self.assertRaisesRegex(ValueError, "subsequent equity"):
+        with self.assertRaisesRegex(ValueError, "terminal equity"):
             maximum_drawdown((Decimal("100"), Decimal("-1")))
+
+    def test_public_helpers_reject_zero_equity_resurrection(self) -> None:
+        resurrected = (Decimal("100"), Decimal("0"), Decimal("100"))
+        with self.assertRaisesRegex(ValueError, "non-terminal equity"):
+            total_return(resurrected)
+        with self.assertRaisesRegex(ValueError, "non-terminal equity"):
+            maximum_drawdown(resurrected)
 
     def test_dual_sources_require_complete_exact_transition_coverage(self) -> None:
         equity_series = (equity(1, "100"), equity(2, "110"), equity(3, "99"))
@@ -378,3 +385,18 @@ class MetricsV1GoldenTests(TestCase):
         unsafe = trusted.model_copy(update={"returns": (unsafe_return,)})
         with self.assertRaises(ValidationError):
             calculate_metric_set(unsafe)
+
+        trusted_equity = metric_input(
+            equity_observations=(equity(1, "100"), equity(2, "90"))
+        )
+        resurrected_equity = trusted_equity.model_copy(
+            update={
+                "equity": (
+                    equity(1, "100"),
+                    equity(2, "0"),
+                    equity(3, "100"),
+                )
+            }
+        )
+        with self.assertRaises(ValidationError):
+            calculate_metric_set(resurrected_equity)
