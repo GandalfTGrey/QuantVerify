@@ -1,6 +1,6 @@
 # ADR-0009：Range-scoped Quality Evidence 与 Research Eligibility
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-11
 - Owner: Argus
 - Reviewer: S-5.6
@@ -235,4 +235,4 @@ Corporate-action window 与 adjusted-return comparison 保留 registry 扩展点
 
 ## Review Gate
 
-ADR 在 S-5.6 对 Issue #10 / Draft PR 完成语义 review 并决定合并后改为 `Accepted`。在此之前实现作为 proposed contract 接受 CI 与 adversarial review。
+ADR 已由 S-5.6 在 PR #58 的最终候选 SHA 完成量化、架构与因果语义 review，并通过独立 QA 对抗重放。后续语义变更必须新建 ADR 或将本 ADR 显式标记为 `Superseded`，不得静默改写已接受契约。
