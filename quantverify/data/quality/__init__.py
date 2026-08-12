@@ -16,6 +16,10 @@ from quantverify.data.quality.models import (
     RevisionPair,
 )
 from quantverify.data.quality.policy import CrossSourceRequirement, QualityPolicy
+from quantverify.data.quality.provenance import (
+    evidence_ref_from_verified_capture,
+    quality_source_from_verified_capture,
+)
 from quantverify.data.quality.suite import QualitySuite
 
 __all__ = [
@@ -35,4 +39,6 @@ __all__ = [
     "QualitySuite",
     "RangeEligibility",
     "RevisionPair",
+    "evidence_ref_from_verified_capture",
+    "quality_source_from_verified_capture",
 ]
