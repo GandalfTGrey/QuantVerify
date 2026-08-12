@@ -99,3 +99,9 @@ class IdentityTests(TestCase):
     def test_identity_rejects_non_string_mapping_keys(self) -> None:
         with self.assertRaisesRegex(TypeError, "string keys"):
             stable_hash({1: "value"}, namespace="test")
+
+    def test_identity_rejects_invalid_namespace_and_digest_length(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must not be blank"):
+            stable_hash("value", namespace=" ")
+        with self.assertRaisesRegex(ValueError, "between 12 and 64"):
+            stable_hash("value", namespace="test", length=8)

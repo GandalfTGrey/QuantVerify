@@ -165,12 +165,13 @@ class DerivedPeriodBar(DomainModel):
 
     @property
     def completeness(self) -> PeriodCompleteness:
-        actual_sessions = self.constituent_schedule.sessions
-        expected_sessions = self.expected_schedule.sessions
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        actual_sessions = validated.constituent_schedule.sessions
+        expected_sessions = validated.expected_schedule.sessions
         if actual_sessions == expected_sessions:
             return PeriodCompleteness.COMPLETE
         first_omitted = expected_sessions[len(actual_sessions)]
-        if self.cutoff_at < first_omitted.session_close_at:
+        if validated.cutoff_at < first_omitted.session_close_at:
             return PeriodCompleteness.PARTIAL_CUTOFF
         return PeriodCompleteness.INCOMPLETE_MISSING_DATA
 

@@ -17,7 +17,7 @@
 ## 决定
 
 1. `BarFrequency` 增加正式的 `1w` 与 `1mo`；二者表示本地从更细频率派生的研究周期，不授权下载供应商周/月线。
-2. `CalendarArtifactRef` 绑定 calendar id/version、IANA timezone、来源/version、完整 artifact 内容 hash 和版本化 session-label policy。`SessionSchedule.content_hash` 另外覆盖请求日期范围、calendar ref 和 UTC 规范化后的精确 session 集合；对象加载和 identity 计算时必须重新验证该 hash，因此不能在保持内容身份不变的同时删减、替换或重排 session。生产调用方只能使用由已验证 calendar artifact 唯一派生并按请求区间固定的 schedule，禁止从待验证 bars 反向自举 schedule。
+2. `CalendarArtifactRef` 绑定 calendar id/version、IANA timezone、来源/version、完整 artifact 内容 hash 和版本化 session-label policy。`SessionSchedule.content_hash` 另外覆盖请求日期范围、calendar ref 和 UTC 规范化后的精确 session 集合；对象加载和 identity 计算时必须重新验证该 hash，因此不能在保持内容身份不变的同时删减、替换或重排 session。领域模型对已构造的嵌套 Pydantic 实例也必须重新验证；schedule factory 和策略计算边界不得信任绕过验证的 `model_copy()` 输入。生产调用方只能使用由已验证 calendar artifact 唯一派生并按请求区间固定的 schedule，禁止从待验证 bars 反向自举 schedule。
 3. 日线策略输入必须与传入 schedule 的 session 和开闭市时间精确一致。缺失、重复、额外或错位 bar 一律 fail closed；不得用“下一行”推断下一真实 session。
 4. close-based signal 的 `decision_at` 等于该信号实际消费的全部 observations 的 `max(available_at)`，并且必须早于下一真实 session open。SMA 使用完整 lookback window 的 availability watermark；后续 stateful feature 必须显式给出等价 dependency watermark。`session_close_at` 只表示市场事件时间，不等于数据已经可用于决策。
 5. schedule identity 把所有 session 时间规范化为 UTC instant 后再 hash；相同 instant 的不同 offset 表达必须产生相同 identity。timezone 仍作为 calendar 语义进入 identity。现有 experiment/run/artifact 的全局 datetime canonicalization 不在本 PR 改变。

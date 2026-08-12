@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from decimal import Decimal
 
+from pydantic import ValidationError
+
 from quantverify.core.enums import SessionLabelPolicy
 from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import SessionSchedule, TargetPosition
@@ -19,6 +21,10 @@ def price_above_sma_targets(
     schedule: SessionSchedule,
 ) -> tuple[TargetPosition, ...]:
     """Create long/flat targets at the next session open from close-based signals."""
+    try:
+        schedule = SessionSchedule.model_validate(schedule.model_dump(mode="python"))
+    except ValidationError as exc:
+        raise DataQualityError("Strategy session schedule failed integrity validation") from exc
     if schedule.calendar.session_label_policy is not SessionLabelPolicy.CLOSE_LOCAL_DATE:
         raise DataQualityError("SMA strategy v1 requires close-local-date session labels")
     bar_sessions = tuple(bar.session for bar in bars)

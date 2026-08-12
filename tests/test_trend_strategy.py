@@ -156,6 +156,14 @@ class TrendGoldenTests(TestCase):
         with self.assertRaisesRegex(DataQualityError, "close-local-date"):
             price_above_sma_targets(bars, window=3, schedule=unsupported)
 
+    def test_strategy_revalidates_unsafe_nested_schedule_models(self) -> None:
+        bars = load_bars()
+        trusted = load_schedule()
+        invalid_calendar = trusted.calendar.model_copy(update={"content_hash": "bad"})
+        unsafe = trusted.model_copy(update={"calendar": invalid_calendar})
+        with self.assertRaisesRegex(DataQualityError, "integrity validation"):
+            price_above_sma_targets(bars, window=3, schedule=unsafe)
+
     def test_decision_waits_for_bar_availability(self) -> None:
         bars = load_bars()
         targets = price_above_sma_targets(bars, window=3, schedule=load_schedule())

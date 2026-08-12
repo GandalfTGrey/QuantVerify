@@ -189,6 +189,28 @@ class SessionScheduleTests(TestCase):
         with self.assertRaisesRegex(ValidationError, "content hash"):
             SessionSchedule.model_validate(tampered)
 
+    def test_factory_revalidates_unsafe_nested_models(self) -> None:
+        trusted = schedule()
+        invalid_calendar = trusted.calendar.model_copy(update={"content_hash": "bad"})
+        with self.assertRaises(ValidationError):
+            SessionSchedule.create(
+                requested_start=trusted.requested_start,
+                requested_end=trusted.requested_end,
+                calendar=invalid_calendar,
+                sessions=trusted.sessions,
+            )
+
+        invalid_session = trusted.sessions[0].model_copy(
+            update={"session_close_at": trusted.sessions[0].session_open_at}
+        )
+        with self.assertRaises(ValidationError):
+            SessionSchedule.create(
+                requested_start=trusted.requested_start,
+                requested_end=trusted.requested_end,
+                calendar=trusted.calendar,
+                sessions=(invalid_session, *trusted.sessions[1:]),
+            )
+
 
 class SeriesDescriptorTests(TestCase):
     def test_frequency_and_lineage_change_descriptor_identity(self) -> None:
@@ -281,6 +303,18 @@ class DerivedPeriodBarTests(TestCase):
         mutable = bar.model_copy(update={"constituent_available_at": mutable_availability})
         with self.assertRaisesRegex(ValueError, "immutable tuple"):
             _ = mutable.period_bar_id
+
+    def test_period_contract_revalidates_unsafe_nested_models(self) -> None:
+        bar = period_bar()
+        invalid_series = bar.series.model_copy(update={"source_content_hash": "bad"})
+        with self.assertRaises(ValidationError):
+            DerivedPeriodBar.model_validate(
+                {**bar.model_dump(mode="python"), "series": invalid_series}
+            )
+
+        unsafe_bar = bar.model_copy(update={"series": invalid_series})
+        with self.assertRaises(ValidationError):
+            _ = unsafe_bar.complete
 
     def test_period_identity_has_fixed_golden_and_normalizes_offsets(self) -> None:
         bar = period_bar()

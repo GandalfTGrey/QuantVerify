@@ -27,7 +27,12 @@ PositionWeight = Annotated[Decimal, Field(allow_inf_nan=False)]
 class DomainModel(BaseModel):
     """Base model: immutable, strict about unknown input, and serialization friendly."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        revalidate_instances="always",
+        str_strip_whitespace=True,
+    )
 
 
 class AssetId(DomainModel):
@@ -104,17 +109,24 @@ class SessionSchedule(DomainModel):
         calendar: CalendarArtifactRef,
         sessions: tuple[TradingSession, ...],
     ) -> SessionSchedule:
+        validated_calendar = CalendarArtifactRef.model_validate(
+            calendar.model_dump(mode="python")
+        )
+        validated_sessions = tuple(
+            TradingSession.model_validate(item.model_dump(mode="python"))
+            for item in sessions
+        )
         payload = cls._content_payload(
             requested_start=requested_start,
             requested_end=requested_end,
-            calendar=calendar,
-            sessions=sessions,
+            calendar=validated_calendar,
+            sessions=validated_sessions,
         )
         return cls(
             requested_start=requested_start,
             requested_end=requested_end,
-            calendar=calendar,
-            sessions=sessions,
+            calendar=validated_calendar,
+            sessions=validated_sessions,
             content_hash=full_hash(payload),
         )
 
