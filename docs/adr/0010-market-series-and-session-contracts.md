@@ -1,6 +1,6 @@
 # ADR-0010：市场序列、派生周期与显式交易 Session 契约
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-12
 - Owner: S-5.6
 - Tracks: Issue #21, #22
