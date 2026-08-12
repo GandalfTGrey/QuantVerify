@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from quantverify.core.enums import AdjustmentMode, BarFrequency
+from quantverify.core.exceptions import DataQualityError
 from quantverify.core.identity import canonicalize, stable_hash
 from quantverify.core.models import AssetId, DomainModel
 from quantverify.data.models import NormalizedBar
@@ -193,11 +194,13 @@ class QualityEvaluationContext(DomainModel):
 
         evidence_ids = tuple(evidence.evidence_id for evidence in self.evidence_refs)
         if len(evidence_ids) != len(set(evidence_ids)):
-            raise ValueError("active quality sources must have unique evidence identities")
+            raise DataQualityError(
+                "active quality sources must have unique evidence identities"
+            )
 
         providers = tuple(evidence.provider for evidence in self.evidence_refs)
         if len(providers) != len(set(providers)):
-            raise ValueError(
+            raise DataQualityError(
                 "active quality sources must represent independent providers; "
                 "same-provider historical observations belong in RevisionPair"
             )
