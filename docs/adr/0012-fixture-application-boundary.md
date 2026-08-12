@@ -27,7 +27,7 @@
 - Metrics v1 的 return basis、annualization、ddof 与 risk-free policy；
 - 当前唯一支持的 typed `DailyTrendParameters(window)`。
 
-`fixture_run_spec_id` 对完整、重验证后的 spec 计算；新 identity payload 将等价时刻统一为 UTC、将 Decimal 按数值规范化（例如 `10000` 与 `10000.00` 相同），但不修改既有全局 identity 或旧 experiment ID。`run_id` 对 `fixture_run_spec_id + RuntimeContext` 计算。artifact root、输出路径和 observation clock 不进入科学或运行环境 identity。
+`fixture_run_spec_id` 对完整、重验证后的 spec 计算；新 identity payload 将等价时刻统一为 UTC、将 Decimal 按数值规范化（例如 `10000` 与 `10000.00` 相同），但不修改既有全局 identity 或旧 experiment ID。`run_id` 对 `legacy experiment_id + fixture_run_spec_id + RuntimeContext` 计算：legacy ID 是兼容锚点，避免两个旧 experiment identity 即使新科学 payload 等价也共享一个 run ID。artifact root、输出路径和 observation clock 不进入科学或运行环境 identity。
 
 既有 `ExperimentConfig.experiment_id` 保持不变；不得静默把新增字段塞入旧 identity。
 
@@ -35,11 +35,11 @@
 
 CORE-05A 只允许：
 
-- `DataSnapshot` fixture，且 `fixture_id == dataset_id`；
+- `DataSnapshot` fixture，且 `fixture_id == dataset_id`；snapshot 的自由文本 `source` 不是 admission authority，CORE-05B 必须与 SW-03 registry 返回的完整 bundle 精确匹配；
 - 单资产日线 `daily_trend`，参数只有严格正整数 `window`；
 - reference engine；
 - BAR_CLOSE decision、NEXT_OPEN execution、lag=1、fractional=true；
-- commission/slippage bps；minimum commission 与 stamp duty 必须为零。
+- commission/slippage bps，且 slippage < 10000；minimum commission 与 stamp duty 必须为零。
 
 策略 version/code hash 与 engine version 仍必须由后续静态 registry 精确匹配；未知或不支持能力 fail closed。现有 `ma_cross(short_window,long_window)` YAML 不满足该契约，不能临时映射为单窗口 SMA。
 

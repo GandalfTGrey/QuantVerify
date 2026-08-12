@@ -190,8 +190,6 @@ class FixtureRunSpec(DomainModel):
             raise ValueError("fixture mode requires a legacy DataSnapshot")
         if self.fixture_id != self.experiment.dataset.dataset_id:
             raise ValueError("fixture_id must equal the DataSnapshot dataset_id")
-        if self.experiment.dataset.source != "fixture":
-            raise ValueError("fixture mode requires an explicitly declared fixture source")
         if self.experiment.frequency is not BarFrequency.DAY:
             raise ValueError("fixture-run-spec v1 requires daily input")
         if self.experiment.strategy.strategy_id != "daily_trend":
@@ -209,6 +207,8 @@ class FixtureRunSpec(DomainModel):
             or self.experiment.cost_model.stamp_duty_bps != 0
         ):
             raise ValueError("reference engine does not support declared fixed or stamp costs")
+        if self.experiment.cost_model.slippage_bps >= 10000:
+            raise ValueError("reference engine requires slippage_bps below 10000")
         assumptions = self.experiment.execution
         if (
             assumptions.decision_time is not DecisionTime.BAR_CLOSE
@@ -241,6 +241,7 @@ class FixtureRunSpec(DomainModel):
         validated_runtime = RuntimeContext.model_validate(runtime.model_dump(mode="python"))
         return stable_hash(
             {
+                "experiment_id": self.experiment.experiment_id,
                 "fixture_run_spec_id": self.fixture_run_spec_id,
                 "runtime": validated_runtime,
             },
@@ -269,7 +270,9 @@ class InspectRunCommand(DomainModel):
     @field_validator("manifest_path", mode="before")
     @classmethod
     def reject_noncanonical_raw_path(cls, value: Any) -> Any:
-        if isinstance(value, str) and value != value.strip():
+        if type(value) is not str:
+            raise ValueError("manifest_path must be supplied as text")
+        if value != value.strip():
             raise ValueError("manifest_path must not contain surrounding whitespace")
         return value
 
@@ -356,12 +359,24 @@ class InspectResult(DomainModel):
     artifact: ArtifactRef
     manifest_path: str = Field(min_length=1, max_length=2048)
     manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    point_count: int = Field(ge=0)
-    trade_count: int = Field(ge=0)
+    point_count: StrictInt = Field(ge=0)
+    trade_count: StrictInt = Field(ge=0)
 
     @model_validator(mode="after")
     def validate_manifest_path(self) -> InspectResult:
-        ArtifactRef.model_validate(self.artifact.model_dump(mode="python"))
+        artifact = ArtifactRef.model_validate(self.artifact.model_dump(mode="python"))
+        if artifact.kind != "reference_result":
+            raise ValueError("artifact v1 inspect requires reference_result kind")
+        if artifact.schema_version != "reference-result-v1":
+            raise ValueError("artifact v1 inspect requires reference-result-v1 schema")
+        expected_uri = (
+            PurePosixPath("artifacts")
+            / "reference_result"
+            / artifact.content_hash[:2]
+            / f"{artifact.content_hash}.json"
+        ).as_posix()
+        if artifact.uri != expected_uri:
+            raise ValueError("artifact v1 inspect requires its canonical content URI")
         InspectRunCommand(manifest_path=self.manifest_path)
         return self
 

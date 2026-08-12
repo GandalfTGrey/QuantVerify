@@ -227,12 +227,12 @@ class FixtureRunSpecTests(TestCase):
             )
         with self.assertRaisesRegex(ValidationError, "implicit latest"):
             spec(fixture_id="latest")
-        with self.assertRaisesRegex(ValidationError, "fixture source"):
-            spec(
-                experiment=experiment(
-                    dataset=experiment().dataset.model_copy(update={"source": "provider"})
-                )
+        alternate_source = spec(
+            experiment=experiment(
+                dataset=experiment().dataset.model_copy(update={"source": "golden_fixture"})
             )
+        )
+        self.assertEqual(alternate_source.fixture_id, "spy-daily-fixture")
         with self.assertRaisesRegex(ValidationError, "daily input"):
             spec(experiment=experiment(frequency=BarFrequency.HOUR))
 
@@ -248,6 +248,7 @@ class FixtureRunSpecTests(TestCase):
             experiment(engine=EngineVersion(engine_id="vectorized", version="1")),
             experiment(cost_model=CostModel(minimum_commission=Decimal("1"))),
             experiment(cost_model=CostModel(stamp_duty_bps=Decimal("1"))),
+            experiment(cost_model=CostModel(slippage_bps=Decimal("10000"))),
             experiment(execution=ExecutionAssumptions(signal_lag_bars=2)),
             experiment(execution=ExecutionAssumptions(allow_fractional=False)),
         )
@@ -337,6 +338,23 @@ class FixtureRunSpecTests(TestCase):
                 }
             )
 
+    def test_run_identity_keeps_legacy_experiment_id_as_compatibility_anchor(self) -> None:
+        offset = timezone(timedelta(hours=8))
+        offset_experiment = experiment(
+            period=TimeRange(
+                start=datetime(2020, 1, 1, 8, tzinfo=offset),
+                end=datetime(2025, 1, 1, 8, tzinfo=offset),
+            )
+        )
+        equivalent = spec(experiment=offset_experiment)
+        baseline = spec()
+        self.assertEqual(equivalent.fixture_run_spec_id, baseline.fixture_run_spec_id)
+        self.assertNotEqual(
+            equivalent.experiment.experiment_id,
+            baseline.experiment.experiment_id,
+        )
+        self.assertNotEqual(equivalent.run_id(runtime()), baseline.run_id(runtime()))
+
 
 class BoundaryResultTests(TestCase):
     def test_run_handler_and_receipt_are_absent_until_core06(self) -> None:
@@ -360,6 +378,8 @@ class BoundaryResultTests(TestCase):
             " run_manifests/file.json",
             "run_manifests/file.json ",
             "run_manifests/file.json\t",
+            b"run_manifests/file.json",
+            b" run_manifests/file.json ",
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 InspectRunCommand(manifest_path=invalid)
@@ -370,7 +390,7 @@ class BoundaryResultTests(TestCase):
             run_id="run_" + "b" * 24,
             artifact=ArtifactRef(
                 kind="reference_result",
-                uri="run_artifacts/aa/result.json",
+                uri="artifacts/reference_result/cc/" + "c" * 64 + ".json",
                 content_hash="c" * 64,
                 schema_version="reference-result-v1",
             ),
@@ -388,6 +408,22 @@ class BoundaryResultTests(TestCase):
             PydanticSerializationError, "InspectResult failed integrity validation"
         ):
             unsafe.model_dump(mode="json")
+
+        invalid_artifacts = (
+            result.artifact.model_copy(update={"kind": "anything"}),
+            result.artifact.model_copy(update={"schema_version": "arbitrary-v9"}),
+            result.artifact.model_copy(update={"uri": "latest://bad"}),
+        )
+        for artifact in invalid_artifacts:
+            with self.subTest(artifact=artifact), self.assertRaises(ValidationError):
+                InspectResult.model_validate(
+                    {**result.model_dump(mode="python"), "artifact": artifact}
+                )
+        for field in ("point_count", "trade_count"):
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                InspectResult.model_validate(
+                    {**result.model_dump(mode="python"), field: True}
+                )
 
     def test_failure_has_fixed_code_and_exit_mapping_without_raw_message(self) -> None:
         expected = {
