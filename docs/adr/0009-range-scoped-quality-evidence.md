@@ -47,6 +47,26 @@ immutable findings / evidence
 
 因此 dual-source requirement 是 dataset/policy-level setting，可设置为 optional 或 required；任何情况下都禁止平均冲突来源或按策略收益选择来源。
 
+### 3.1 A3 v1 的独立信源身份固定为 provider
+
+`minimum_sources_per_session=2` 表示至少两个**独立 provider authority**，而不是两个 Python source objects、两个 capture、两个 endpoint 或同一 vendor 的两个历史版本。
+
+A3 v1 明确定义：
+
+```text
+independent_source_key = QualityEvidenceRef.provider
+```
+
+因此 active quality source set 必须满足：
+
+- `evidence_id` 唯一；完全重复的 observation 不得重复计数；
+- 每个 `provider` 最多出现一个 current active observation；
+- 同 provider 的旧/新历史 capture 应进入 `RevisionPair`，不得伪装成两个 independent verifier；
+- requested-range coverage 对每个 session 统计的是 distinct provider identities；
+- pairwise cross-source overlap / OHLC comparison 只允许发生在不同 provider 之间。
+
+两个 endpoint 即使来自同一 provider，也不构成独立验证来源。未来若业务确实需要更细的 source-authority 语义，必须通过新的 versioned policy/ADR 显式修改，不能静默改变 `provider` 的含义。
+
 ### 4. 质量报告必须同时绑定 Raw lineage 与 Normalized input identity
 
 每个 source 的 raw evidence 继续记录：
@@ -183,7 +203,7 @@ Corporate-action window 与 adjusted-return comparison 保留 registry 扩展点
 
 - 同一完整历史可以对不同请求区间产生不同、可解释的 eligibility；
 - 数据异常不会被隐藏，但区间外异常不再无条件阻塞研究；
-- 双源校验从“全局真理规则”变为版本化 evidence policy；
+- 双源校验从“全局真理规则”变为版本化 evidence policy，并且只按独立 provider 计数；
 - normalized rows、normalizer、policy 内容、calendar session set 的任何科学变化都会改变报告 identity；
 - unknown normalized schema fail closed，而不是静默 PASS；
 - 后续 A4 `DatasetRelease` 可以直接消费 range eligibility 和 immutable scientific input refs，而无需重新解释 raw findings；
