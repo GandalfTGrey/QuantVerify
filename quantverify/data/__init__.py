@@ -2,6 +2,15 @@
 
 from quantverify.data.capture import RawCapture
 from quantverify.data.models import CrossSourcePolicy, NormalizedBar
+from quantverify.data.quality import (
+    CrossSourceRequirement,
+    DataQualityReportV2,
+    EligibilityStatus,
+    ExpectedSessionSetRef,
+    NormalizedInputRef,
+    QualityPolicy,
+    QualitySuite,
+)
 from quantverify.data.snapshots import RawSnapshotWriter, SnapshotWriteResult
 from quantverify.data.store import (
     CaptureStore,
@@ -14,9 +23,16 @@ from quantverify.data.validation import CrossSourceValidator
 __all__ = [
     "CaptureStore",
     "CrossSourcePolicy",
+    "CrossSourceRequirement",
     "CrossSourceValidator",
     "DataLicenseProfile",
+    "DataQualityReportV2",
+    "EligibilityStatus",
+    "ExpectedSessionSetRef",
     "NormalizedBar",
+    "NormalizedInputRef",
+    "QualityPolicy",
+    "QualitySuite",
     "RawCapture",
     "RawSnapshotWriter",
     "SnapshotWriteResult",
