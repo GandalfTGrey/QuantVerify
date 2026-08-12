@@ -67,9 +67,8 @@ class MetricsV1GoldenTests(TestCase):
             metric_input(
                 equity_observations=(
                     equity(1, "100"),
-                    equity(2, "120"),
-                    equity(3, "90"),
-                    equity(4, "110"),
+                    equity(2, "110"),
+                    equity(3, "99"),
                 ),
                 return_observations=(
                     period_return(2, "0.10"),
@@ -79,8 +78,8 @@ class MetricsV1GoldenTests(TestCase):
         )
 
         self.assertEqual(result.metric_set_version, "metrics-v1")
-        self.assertEqual(result.total_return.value, Decimal("0.1"))
-        self.assertEqual(result.max_drawdown.value, Decimal("-0.25"))
+        self.assertEqual(result.total_return.value, Decimal("-0.01"))
+        self.assertEqual(result.max_drawdown.value, Decimal("-0.1"))
         self.assertEqual(result.volatility.value, Decimal("0.2"))
         self.assertEqual(result.sharpe.value, Decimal("0"))
         self.assertEqual(result.total_return.status, MetricStatus.VALID)
@@ -181,12 +180,11 @@ class MetricsV1GoldenTests(TestCase):
         self.assertAlmostEqual(float(annual_rate.sharpe.value or 0), 2.0, places=12)
 
     def test_insufficient_samples_and_zero_volatility_are_undefined(self) -> None:
-        insufficient = calculate_metric_set(
-            metric_input(
-                equity_observations=(equity(1, "100"),),
-                return_observations=(period_return(2, "0.1"),),
-                ddof=1,
-            )
+        insufficient_equity = calculate_metric_set(
+            metric_input(equity_observations=(equity(1, "100"),))
+        )
+        insufficient_returns = calculate_metric_set(
+            metric_input(return_observations=(period_return(2, "0.1"),), ddof=1)
         )
         constant = calculate_metric_set(
             metric_input(
@@ -198,15 +196,15 @@ class MetricsV1GoldenTests(TestCase):
         )
 
         self.assertEqual(
-            insufficient.total_return.reason,
+            insufficient_equity.total_return.reason,
             MetricReason.INSUFFICIENT_EQUITY_OBSERVATIONS,
         )
         self.assertEqual(
-            insufficient.volatility.reason,
+            insufficient_returns.volatility.reason,
             MetricReason.INSUFFICIENT_RETURN_OBSERVATIONS,
         )
         self.assertEqual(
-            insufficient.sharpe.reason,
+            insufficient_returns.sharpe.reason,
             MetricReason.INSUFFICIENT_RETURN_OBSERVATIONS,
         )
         self.assertEqual(constant.volatility.value, Decimal("0"))
@@ -255,6 +253,104 @@ class MetricsV1GoldenTests(TestCase):
             total_return((Decimal("0"), Decimal("100")))
         with self.assertRaisesRegex(ValueError, "subsequent equity"):
             maximum_drawdown((Decimal("100"), Decimal("-1")))
+
+    def test_dual_sources_require_complete_exact_transition_coverage(self) -> None:
+        equity_series = (equity(1, "100"), equity(2, "110"), equity(3, "99"))
+        invalid_returns = (
+            ((period_return(2, "0.10"),), "cover every equity transition"),
+            (
+                (period_return(2, "0.10"), period_return(4, "-0.10")),
+                "later equity observation date",
+            ),
+            (
+                (period_return(2, "0.10"), period_return(3, "-0.09")),
+                "exactly match",
+            ),
+        )
+        for returns, message in invalid_returns:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValidationError,
+                message,
+            ):
+                metric_input(
+                    equity_observations=equity_series,
+                    return_observations=returns,
+                )
+
+    def test_zero_equity_and_complete_loss_cannot_resurrect(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "zero equity must be the terminal"):
+            metric_input(
+                equity_observations=(equity(1, "100"), equity(2, "0"), equity(3, "10")),
+            )
+        with self.assertRaisesRegex(ValidationError, "complete-loss return must be the terminal"):
+            metric_input(
+                return_observations=(period_return(2, "-1"), period_return(3, "0.1")),
+            )
+
+    def test_equity_only_and_returns_only_inputs_remain_supported(self) -> None:
+        equity_only = calculate_metric_set(
+            metric_input(equity_observations=(equity(1, "100"), equity(2, "110")))
+        )
+        returns_only = calculate_metric_set(
+            metric_input(
+                return_observations=(period_return(2, "0.1"), period_return(3, "-0.1"))
+            )
+        )
+
+        self.assertEqual(equity_only.total_return.value, Decimal("0.1"))
+        self.assertEqual(
+            equity_only.volatility.reason,
+            MetricReason.INSUFFICIENT_RETURN_OBSERVATIONS,
+        )
+        self.assertEqual(returns_only.volatility.value, Decimal("0.2"))
+        self.assertEqual(
+            returns_only.total_return.reason,
+            MetricReason.INSUFFICIENT_EQUITY_OBSERVATIONS,
+        )
+
+    def test_metric_status_reason_matrix_is_closed(self) -> None:
+        mathematical_reasons = (
+            MetricReason.INSUFFICIENT_EQUITY_OBSERVATIONS,
+            MetricReason.INSUFFICIENT_RETURN_OBSERVATIONS,
+            MetricReason.NON_POSITIVE_ELAPSED_TIME,
+            MetricReason.ZERO_VOLATILITY,
+        )
+        MetricValue(status=MetricStatus.VALID, value=Decimal("0"))
+        MetricValue(status=MetricStatus.FAILURE, reason=MetricReason.NUMERIC_ERROR)
+        for reason in mathematical_reasons:
+            MetricValue(status=MetricStatus.UNDEFINED, reason=reason)
+
+        invalid_states = [
+            {"status": MetricStatus.VALID},
+            {
+                "status": MetricStatus.VALID,
+                "value": Decimal("0"),
+                "reason": MetricReason.ZERO_VOLATILITY,
+            },
+            {"status": MetricStatus.UNDEFINED},
+            {
+                "status": MetricStatus.UNDEFINED,
+                "reason": MetricReason.NUMERIC_ERROR,
+            },
+            {
+                "status": MetricStatus.UNDEFINED,
+                "value": Decimal("0"),
+                "reason": MetricReason.ZERO_VOLATILITY,
+            },
+            {"status": MetricStatus.FAILURE},
+            {
+                "status": MetricStatus.FAILURE,
+                "reason": MetricReason.ZERO_VOLATILITY,
+            },
+            {
+                "status": MetricStatus.FAILURE,
+                "value": Decimal("0"),
+                "reason": MetricReason.NUMERIC_ERROR,
+            },
+        ]
+        for state in invalid_states:
+            with self.subTest(state=state), self.assertRaises(ValidationError):
+                MetricValue.model_validate(state)
 
     def test_metric_value_never_presents_nan_or_infinity_as_valid(self) -> None:
         for invalid in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):

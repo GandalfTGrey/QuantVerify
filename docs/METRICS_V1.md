@@ -33,6 +33,26 @@ preserve a legitimate 100% long-only loss while rejecting impossible unlevered l
 computed independently: missing equity observations do not suppress return-based metrics, and
 missing return observations do not suppress equity-based metrics.
 
+When both observation series are supplied, they must describe exactly one trajectory. There
+must be one return for every adjacent equity pair; each return is dated on the later equity
+observation and must exactly equal `equity_t / equity_(t-1) - 1`. V1 has no reconciliation
+tolerance. Zero equity and a `-1` simple return are terminal because percentage returns after a
+zero base are undefined. Equity-only and returns-only inputs remain supported, with metrics
+requiring the absent source reported as `undefined`.
+
+The status/reason matrix is closed: `valid` has a finite value and no reason; `failure` has no
+value and uses only `numeric_error`; `undefined` has no value and uses only the declared
+mathematical-domain reasons. A numeric calculation error cannot be mislabeled as undefined, and
+a mathematically undefined result cannot be mislabeled as a calculation failure.
+
 The risk-free policy is a scalar assumption in v1, but it is never anonymous: its unit,
 `policy_id`, `source_id`, and `source_version` are persisted in the result. A future version
 may add an as-of dated risk-free curve without silently changing v1 semantics.
+
+## Deferred integration requirements
+
+V1 does not yet bind observation content, range, or count into an artifact identity. Artifact v2
+must bind the full `MetricInput` lineage before persistence or application use. Upstream
+frequency/calendar preflight must prove that dated return intervals support the declared
+`periods_per_year`. The scalar risk-free source has no as-of, availability, or currency contract
+and must not be presented as a causal risk-free curve.

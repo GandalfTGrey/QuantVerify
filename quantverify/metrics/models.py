@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from fractions import Fraction
 from itertools import pairwise
 from typing import Annotated
 
@@ -59,6 +60,16 @@ class MetricReason(StrEnum):
     NON_POSITIVE_ELAPSED_TIME = "non_positive_elapsed_time"
     ZERO_VOLATILITY = "zero_volatility"
     NUMERIC_ERROR = "numeric_error"
+
+
+_UNDEFINED_REASONS = frozenset(
+    {
+        MetricReason.INSUFFICIENT_EQUITY_OBSERVATIONS,
+        MetricReason.INSUFFICIENT_RETURN_OBSERVATIONS,
+        MetricReason.NON_POSITIVE_ELAPSED_TIME,
+        MetricReason.ZERO_VOLATILITY,
+    }
+)
 
 
 class EquityObservation(MetricModel):
@@ -123,7 +134,28 @@ class MetricInput(MetricModel):
             dates = tuple(item.observed_on for item in observations)
             if any(left >= right for left, right in pairwise(dates)):
                 raise ValueError(f"{name} observations must be strictly ordered by date")
+        if any(item.equity == 0 for item in self.equity[:-1]):
+            raise ValueError("zero equity must be the terminal equity observation")
+        if any(item.value == Decimal("-1") for item in self.returns[:-1]):
+            raise ValueError("a complete-loss return must be the terminal return observation")
+        if self.equity and self.returns:
+            self._validate_transition_returns()
         return self
+
+    def _validate_transition_returns(self) -> None:
+        if len(self.returns) != len(self.equity) - 1:
+            raise ValueError("returns must cover every equity transition")
+        for previous, current, observed_return in zip(
+            self.equity[:-1],
+            self.equity[1:],
+            self.returns,
+            strict=True,
+        ):
+            if observed_return.observed_on != current.observed_on:
+                raise ValueError("return date must match the later equity observation date")
+            expected = Fraction(current.equity) / Fraction(previous.equity) - 1
+            if Fraction(observed_return.value) != expected:
+                raise ValueError("return value must exactly match its equity transition")
 
 
 class MetricValue(MetricModel):
@@ -136,8 +168,13 @@ class MetricValue(MetricModel):
         if self.status is MetricStatus.VALID:
             if self.value is None or self.reason is not None:
                 raise ValueError("valid metric requires a value and no reason")
-        elif self.value is not None or self.reason is None:
-            raise ValueError("non-valid metric requires a reason and no value")
+        elif self.status is MetricStatus.UNDEFINED:
+            if self.value is not None or self.reason not in _UNDEFINED_REASONS:
+                raise ValueError(
+                    "undefined metric requires no value and one mathematical-domain reason"
+                )
+        elif self.value is not None or self.reason is not MetricReason.NUMERIC_ERROR:
+            raise ValueError("failure metric requires no value and numeric_error reason")
         return self
 
 
