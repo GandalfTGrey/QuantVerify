@@ -164,6 +164,32 @@ class TrendGoldenTests(TestCase):
         with self.assertRaisesRegex(DataQualityError, "integrity validation"):
             price_above_sma_targets(bars, window=3, schedule=unsafe)
 
+    def test_strategy_revalidates_unsafe_bar_state(self) -> None:
+        bars = load_bars()
+        unsafe = bars[2].model_copy(
+            update={
+                "available_at": datetime(2026, 1, 1, tzinfo=UTC),
+                "close": Decimal("1000000"),
+            }
+        )
+        with self.assertRaisesRegex(DataQualityError, "bars failed integrity"):
+            price_above_sma_targets(
+                (*bars[:2], unsafe, *bars[3:]),
+                window=3,
+                schedule=load_schedule(),
+            )
+
+    def test_strategy_revalidates_unsafe_nested_bar_asset(self) -> None:
+        bars = load_bars()
+        invalid_asset = bars[2].asset.model_copy(update={"currency": "INVALID"})
+        unsafe = bars[2].model_copy(update={"asset": invalid_asset})
+        with self.assertRaisesRegex(DataQualityError, "bars failed integrity"):
+            price_above_sma_targets(
+                (*bars[:2], unsafe, *bars[3:]),
+                window=3,
+                schedule=load_schedule(),
+            )
+
     def test_decision_waits_for_bar_availability(self) -> None:
         bars = load_bars()
         targets = price_above_sma_targets(bars, window=3, schedule=load_schedule())

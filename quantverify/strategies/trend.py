@@ -25,6 +25,12 @@ def price_above_sma_targets(
         schedule = SessionSchedule.model_validate(schedule.model_dump(mode="python"))
     except ValidationError as exc:
         raise DataQualityError("Strategy session schedule failed integrity validation") from exc
+    try:
+        bars = tuple(
+            NormalizedBar.model_validate(bar.model_dump(mode="python")) for bar in bars
+        )
+    except ValidationError as exc:
+        raise DataQualityError("Strategy bars failed integrity validation") from exc
     if schedule.calendar.session_label_policy is not SessionLabelPolicy.CLOSE_LOCAL_DATE:
         raise DataQualityError("SMA strategy v1 requires close-local-date session labels")
     bar_sessions = tuple(bar.session for bar in bars)
