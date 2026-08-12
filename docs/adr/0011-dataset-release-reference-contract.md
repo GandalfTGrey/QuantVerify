@@ -1,6 +1,6 @@
 # ADR-0011：DatasetReleaseRef 与真实数据实验边界
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-12
 - Owner / Reviewer: S-5.6 / Argus、Q-Lead、QA-Lead
 - Depends on: ADR-0009, ADR-0010
@@ -100,4 +100,4 @@ CORE-05 real-data preflight 必须解析该受信 release，而不是仅接受�
 
 ## Review Gate
 
-ADR 在 CORE-03 Draft PR 通过 S-5.6、数据/量化与独立 QA 对抗 review 后才能改为 `Accepted`。在此之前 A4 implementation 可以据此准备设计，但不得合并或宣称真实数据 release 可用。
+本 ADR 已通过 S-5.6 与独立 QA 对抗 review。A4 implementation 可以据此准备实现，但在 verified factory/store、权威 calendar resolver 与 application preflight 完成前，不得宣称真实数据 release 可用。
