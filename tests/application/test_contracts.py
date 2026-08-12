@@ -231,6 +231,16 @@ class FixtureRunSpecTests(TestCase):
                 spec(experiment=candidate)
         with self.assertRaises(ValidationError):
             DailyTrendParameters(window=True)
+        with self.assertRaisesRegex(ValidationError, "strict non-bool"):
+            spec(
+                experiment=experiment(parameters={"window": True}),
+                strategy_parameters=DailyTrendParameters(window=1),
+            )
+        with self.assertRaisesRegex(ValidationError, "strict non-bool"):
+            spec(
+                experiment=experiment(parameters={"window": Decimal("3")}),
+                strategy_parameters=DailyTrendParameters(window=3),
+            )
 
     def test_identity_revalidates_unsafe_nested_mutations(self) -> None:
         baseline = spec()

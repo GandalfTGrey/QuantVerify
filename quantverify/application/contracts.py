@@ -169,6 +169,9 @@ class FixtureRunSpec(DomainModel):
             raise ValueError("fixture-run-spec v1 requires daily input")
         if self.experiment.strategy.strategy_id != "daily_trend":
             raise ValueError("fixture-run-spec v1 supports only daily_trend")
+        raw_window = self.experiment.parameters.get("window")
+        if type(raw_window) is not int:
+            raise ValueError("daily_trend window must be a strict non-bool integer")
         expected_parameters = {"window": self.strategy_parameters.window}
         if self.experiment.parameters != expected_parameters:
             raise ValueError("daily_trend parameters must contain only a strict window")
