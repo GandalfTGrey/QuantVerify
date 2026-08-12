@@ -29,6 +29,8 @@ def daily_donchian_targets(
     _validate_inputs(daily_bars, schedule=schedule)
     if len(daily_bars) <= S2_ENTRY_WINDOW:
         return ()
+    if len(schedule.sessions) <= len(daily_bars):
+        raise DataQualityError("S2 requires an immediate next eligible session after the bars")
 
     entry_channels = prior_rolling_max(
         tuple(bar.high for bar in daily_bars),
@@ -102,8 +104,8 @@ def _validate_inputs(
 ) -> None:
     if schedule.calendar.session_label_policy is not SessionLabelPolicy.CLOSE_LOCAL_DATE:
         raise DataQualityError("S2 requires close-local-date eligible session labels")
-    if len(schedule.sessions) <= len(bars):
-        raise DataQualityError("S2 requires an immediate next eligible session after the bars")
+    if len(schedule.sessions) < len(bars):
+        raise DataQualityError("S2 eligible schedule cannot be shorter than the daily bars")
     expected_prefix = schedule.sessions[: len(bars)]
     if tuple(bar.session for bar in bars) != tuple(item.session for item in expected_prefix):
         raise DataQualityError("S2 daily bars must exactly cover the eligible schedule prefix")

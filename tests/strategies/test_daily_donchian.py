@@ -180,9 +180,23 @@ class DailyDonchianGoldenTests(TestCase):
 
     def test_warmup_and_future_truncation_are_invariant(self) -> None:
         self.assertEqual(daily_donchian_targets((), eligible_schedule=self.schedule), ())
+        exact_warmup_schedule = schedule(55)
         self.assertEqual(
-            daily_donchian_targets(self.bars[:55], eligible_schedule=self.schedule),
+            daily_donchian_targets(
+                self.bars[:55],
+                eligible_schedule=exact_warmup_schedule,
+            ),
             (),
+        )
+        first_signal_schedule = schedule(57)
+        self.assertEqual(
+            len(
+                daily_donchian_targets(
+                    self.bars[:56],
+                    eligible_schedule=first_signal_schedule,
+                )
+            ),
+            1,
         )
         full = daily_donchian_targets(self.bars, eligible_schedule=self.schedule)
         truncated = daily_donchian_targets(self.bars[:58], eligible_schedule=self.schedule)
@@ -264,14 +278,9 @@ class DailyDonchianFailureTests(TestCase):
             )
 
     def test_missing_immediate_next_session_fails_closed(self) -> None:
-        no_next = SessionSchedule.create(
-            requested_start=self.schedule.requested_start,
-            requested_end=self.bars[-1].session,
-            calendar=CALENDAR,
-            sessions=self.schedule.sessions[: len(self.bars)],
-        )
+        no_next = schedule(56)
         with self.assertRaisesRegex(DataQualityError, "immediate next"):
-            daily_donchian_targets(self.bars, eligible_schedule=no_next)
+            daily_donchian_targets(self.bars[:56], eligible_schedule=no_next)
 
     def test_mixed_asset_and_source_fail_closed(self) -> None:
         mixed_asset = rebuild_bar(self.bars[10], asset=DIA)
