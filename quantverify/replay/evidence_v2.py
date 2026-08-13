@@ -7,10 +7,19 @@ import json
 import math
 import re
 import struct
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any, Final, Literal
+from enum import StrEnum
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
-from pydantic import BeforeValidator, Field, StrictInt, ValidationError, model_validator
+from pydantic import (
+    BeforeValidator,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from quantverify.application.contracts import (
     ConsumedSessionRange,
@@ -22,6 +31,7 @@ from quantverify.application.contracts import (
 from quantverify.core.enums import BarFrequency
 from quantverify.core.exceptions import QuantVerifyError
 from quantverify.core.models import (
+    AssetId,
     CostModel,
     DataSnapshot,
     DomainModel,
@@ -34,13 +44,12 @@ from quantverify.core.models import (
     TimeRange,
     ValidationConfig,
 )
-from quantverify.engines.reference import LongFlatReferenceEngine, ReferenceResult
 from quantverify.fixtures.models import FixtureManifest
 from quantverify.implementation_registry import (
     EngineImplementationRefV1,
-    ImplementationRegistry,
     StrategyImplementationRefV1,
     builtin_implementation_registry,
+    is_reviewed_runtime_dependency_cohort,
 )
 from quantverify.metrics.models import ReturnBasis
 from quantverify.metrics.v2_calculator import calculate_metric_set_v2
@@ -58,13 +67,15 @@ from quantverify.metrics.v2_models import (
     MetricSetV2,
     RiskFreePolicyV2,
 )
-from quantverify.strategies.trend import price_above_sma_targets
 
 _HEX64 = re.compile(r"^[a-f0-9]{16}$")
 _HASH64 = r"^[a-f0-9]{64}$"
 _ID24 = r"^(?:exp|fixture-run-spec|run)_[a-f0-9]{24}$"
 MAX_EVIDENCE_ROWS: Final = 10_000
 V2Decimal = Annotated[Decimal, BeforeValidator(parse_decimal_value_v1)]
+
+if TYPE_CHECKING:
+    from quantverify.engines.reference import ReferenceResult
 
 
 class FixtureReplayIntegrityError(QuantVerifyError):
@@ -74,6 +85,13 @@ class FixtureReplayIntegrityError(QuantVerifyError):
 class Binary64ValueV1(DomainModel):
     schema_version: Literal["binary64-value-v1"] = "binary64-value-v1"
     bits: str = Field(pattern=r"^[a-f0-9]{16}$")
+
+    @field_validator("bits", mode="before")
+    @classmethod
+    def require_exact_bits_text(cls, value: object) -> object:
+        if type(value) is not str or value != value.strip():
+            raise ValueError("binary64 bits must remain canonical text")
+        return value
 
     @classmethod
     def from_float(cls, value: float) -> Binary64ValueV1:
@@ -99,6 +117,8 @@ class ValidationConfigEvidenceProjectionV1(DomainModel):
     train_fraction: Binary64ValueV1
     validation_fraction: Binary64ValueV1
     test_fraction: Binary64ValueV1
+    purge_bars: StrictInt = Field(ge=0)
+    embargo_bars: StrictInt = Field(ge=0)
 
     @classmethod
     def from_domain(cls, value: ValidationConfig) -> ValidationConfigEvidenceProjectionV1:
@@ -107,6 +127,8 @@ class ValidationConfigEvidenceProjectionV1(DomainModel):
             train_fraction=Binary64ValueV1.from_float(validated.train_fraction),
             validation_fraction=Binary64ValueV1.from_float(validated.validation_fraction),
             test_fraction=Binary64ValueV1.from_float(validated.test_fraction),
+            purge_bars=validated.purge_bars,
+            embargo_bars=validated.embargo_bars,
         )
 
     def to_domain(self) -> ValidationConfig:
@@ -115,6 +137,8 @@ class ValidationConfigEvidenceProjectionV1(DomainModel):
             train_fraction=validated.train_fraction.to_float(),
             validation_fraction=validated.validation_fraction.to_float(),
             test_fraction=validated.test_fraction.to_float(),
+            purge_bars=validated.purge_bars,
+            embargo_bars=validated.embargo_bars,
         )
 
 
@@ -203,6 +227,55 @@ class FixtureMetricPolicyEvidenceProjectionV1(DomainModel):
     risk_free: RiskFreePolicyV2
 
 
+class ReferenceTradeSideEvidenceV1(StrEnum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class ReferenceTradeEvidenceProjectionV1(DomainModel):
+    asset: AssetId
+    side: ReferenceTradeSideEvidenceV1
+    executed_at: datetime
+    reference_price: V2Decimal
+    execution_price: V2Decimal
+    quantity: V2Decimal
+    commission: V2Decimal
+    slippage_cost: V2Decimal
+
+
+class PortfolioPointEvidenceProjectionV1(DomainModel):
+    session: date
+    timestamp: datetime
+    close: V2Decimal
+    cash: V2Decimal
+    quantity: V2Decimal
+    equity: V2Decimal
+    target_weight: V2Decimal
+    actual_weight: V2Decimal
+
+
+class ReferenceResultEvidenceProjectionV1(DomainModel):
+    asset: AssetId
+    initial_cash: V2Decimal
+    points: tuple[PortfolioPointEvidenceProjectionV1, ...]
+    trades: tuple[ReferenceTradeEvidenceProjectionV1, ...]
+    total_commission: V2Decimal
+    total_slippage: V2Decimal
+
+    @classmethod
+    def from_domain(cls, value: ReferenceResult) -> ReferenceResultEvidenceProjectionV1:
+        from quantverify.engines.reference import ReferenceResult
+
+        validated = ReferenceResult.model_validate(value.model_dump(mode="python"))
+        return cls.model_validate(validated.model_dump(mode="python"))
+
+    def to_domain(self) -> ReferenceResult:
+        from quantverify.engines.reference import ReferenceResult
+
+        validated = type(self).model_validate(self.model_dump(mode="python"))
+        return ReferenceResult.model_validate(validated.model_dump(mode="python"))
+
+
 class FixtureRunSpecEvidenceProjectionV1(DomainModel):
     schema_version: Literal["fixture-run-spec-evidence-projection-v1"] = (
         "fixture-run-spec-evidence-projection-v1"
@@ -270,7 +343,7 @@ class FixtureRunEvidenceV2(DomainModel):
     targets: tuple[TargetPosition, ...] = Field(max_length=MAX_EVIDENCE_ROWS)
     targets_content_hash: str = Field(pattern=_HASH64)
     engine: EngineImplementationRefV1
-    reference_result: ReferenceResult
+    reference_result: ReferenceResultEvidenceProjectionV1
     metric_input: MetricInputV2
     metric_input_content_hash: str = Field(pattern=_HASH64)
     calculator: MetricCalculatorRef
@@ -281,6 +354,34 @@ class FixtureRunEvidenceV2(DomainModel):
     def validate_detached_cross_fields(self) -> FixtureRunEvidenceV2:
         if not isinstance(self.targets, tuple):
             raise ValueError("fixture evidence targets must remain immutable")
+        if not isinstance(self.fixture_manifest.bundle.bars, tuple):
+            raise ValueError("fixture evidence bars must remain immutable")
+        if not isinstance(self.reference_result.points, tuple) or not isinstance(
+            self.reference_result.trades, tuple
+        ):
+            raise ValueError("fixture evidence result rows must remain immutable")
+        row_groups = (
+            self.fixture_manifest.bundle.bars,
+            self.targets,
+            self.reference_result.points,
+            self.reference_result.trades,
+        )
+        _require_bounded_evidence_rows(*row_groups)
+        manifest = FixtureManifest.model_validate(
+            self.fixture_manifest.model_dump(mode="python")
+        )
+        result = ReferenceResultEvidenceProjectionV1.model_validate(
+            self.reference_result.model_dump(mode="python")
+        )
+        if manifest != self.fixture_manifest or result != self.reference_result:
+            raise ValueError("fixture evidence nested rows failed exact revalidation")
+        if (
+            self.strategy.runtime_dependencies != self.engine.runtime_dependencies
+            or not is_reviewed_runtime_dependency_cohort(
+                self.strategy.runtime_dependencies
+            )
+        ):
+            raise ValueError("fixture evidence runtime dependency cohort is not reviewed")
         spec = self.fixture_run_spec.to_domain()
         if self.experiment_id != spec.experiment.experiment_id:
             raise ValueError("evidence experiment identity does not match its spec")
@@ -315,7 +416,6 @@ def build_fixture_run_evidence_v2(
     spec: FixtureRunSpec,
     runtime: RuntimeContext,
     fixture_manifest: FixtureManifest,
-    registry: ImplementationRegistry | None = None,
 ) -> ReplayedFixtureEvidenceV2:
     failed = False
     result: ReplayedFixtureEvidenceV2 | None = None
@@ -323,22 +423,30 @@ def build_fixture_run_evidence_v2(
         validated_spec = FixtureRunSpec.model_validate(spec.model_dump(mode="python"))
         validated_runtime = RuntimeContext.model_validate(runtime.model_dump(mode="python"))
         manifest = FixtureManifest.model_validate(fixture_manifest.model_dump(mode="python"))
-        active_registry = registry or builtin_implementation_registry()
+        _validate_spec_manifest(validated_spec, manifest)
+        _require_bounded_evidence_rows(manifest.bundle.bars)
+        active_registry = builtin_implementation_registry()
         strategy, engine = active_registry.resolve_versions(
             validated_spec.experiment.strategy, validated_spec.experiment.engine
         )
-        _validate_spec_manifest(validated_spec, manifest)
+        from quantverify.engines.reference import LongFlatReferenceEngine
+        from quantverify.strategies.trend import price_above_sma_targets
+
         targets = price_above_sma_targets(
             manifest.bundle.bars,
             window=validated_spec.strategy_parameters.window,
             schedule=manifest.bundle.schedule,
         )
+        _require_bounded_evidence_rows(targets)
         reference_result = LongFlatReferenceEngine().run(
             manifest.bundle.bars,
             targets,
             initial_cash=validated_spec.execution.initial_cash,
             commission_bps=validated_spec.experiment.cost_model.commission_bps,
             slippage_bps=validated_spec.experiment.cost_model.slippage_bps,
+        )
+        _require_bounded_evidence_rows(
+            reference_result.points, reference_result.trades
         )
         metric_input, calculator, metric_set = _derive_metrics(
             validated_spec, manifest, reference_result
@@ -353,7 +461,9 @@ def build_fixture_run_evidence_v2(
             targets=targets,
             targets_content_hash=fixture_target_positions_content_hash_v1(targets),
             engine=engine.ref,
-            reference_result=reference_result,
+            reference_result=ReferenceResultEvidenceProjectionV1.from_domain(
+                reference_result
+            ),
             metric_input=metric_input,
             metric_input_content_hash=metric_input.content_hash,
             calculator=calculator,
@@ -361,11 +471,12 @@ def build_fixture_run_evidence_v2(
             metric_set_content_hash=metric_set.content_hash,
         )
         result = replay_fixture_run_evidence_v2(
-            evidence, runtime=validated_runtime, registry=active_registry
+            evidence, runtime=validated_runtime
         )
     except (
         AttributeError,
         ArithmeticError,
+        OSError,
         QuantVerifyError,
         TypeError,
         ValueError,
@@ -383,7 +494,6 @@ def replay_fixture_run_evidence_v2(
     evidence: FixtureRunEvidenceV2,
     *,
     runtime: RuntimeContext,
-    registry: ImplementationRegistry | None = None,
 ) -> ReplayedFixtureEvidenceV2:
     failed = False
     replayed: FixtureRunEvidenceV2 | None = None
@@ -394,12 +504,15 @@ def replay_fixture_run_evidence_v2(
         if validated.run_id != spec.run_id(validated_runtime):
             raise ValueError("evidence run identity does not match the supplied runtime")
         _validate_spec_manifest(spec, validated.fixture_manifest)
-        active_registry = registry or builtin_implementation_registry()
+        active_registry = builtin_implementation_registry()
         strategy, engine = active_registry.resolve_versions(
             spec.experiment.strategy, spec.experiment.engine
         )
         if validated.strategy != strategy.ref or validated.engine != engine.ref:
             raise ValueError("evidence implementation refs do not match the registry")
+        from quantverify.engines.reference import LongFlatReferenceEngine
+        from quantverify.strategies.trend import price_above_sma_targets
+
         expected_targets = price_above_sma_targets(
             validated.fixture_manifest.bundle.bars,
             window=spec.strategy_parameters.window,
@@ -414,7 +527,7 @@ def replay_fixture_run_evidence_v2(
             commission_bps=spec.experiment.cost_model.commission_bps,
             slippage_bps=spec.experiment.cost_model.slippage_bps,
         )
-        if validated.reference_result != expected_result:
+        if validated.reference_result.to_domain() != expected_result:
             raise ValueError("evidence result does not match engine replay")
         _validate_first_close_flat(
             spec,
@@ -435,6 +548,7 @@ def replay_fixture_run_evidence_v2(
     except (
         AttributeError,
         ArithmeticError,
+        OSError,
         QuantVerifyError,
         TypeError,
         ValueError,
@@ -543,6 +657,14 @@ def _validate_spec_manifest(spec: FixtureRunSpec, manifest: FixtureManifest) -> 
     )
     if not all(expected):
         raise ValueError("fixture run spec does not bind the complete fixture manifest")
+
+
+def _require_bounded_evidence_rows(*row_groups: tuple[Any, ...]) -> None:
+    if any(
+        not isinstance(rows, tuple) or len(rows) > MAX_EVIDENCE_ROWS
+        for rows in row_groups
+    ):
+        raise ValueError("fixture evidence rows must remain bounded immutable tuples")
 
 
 def _derive_metrics(

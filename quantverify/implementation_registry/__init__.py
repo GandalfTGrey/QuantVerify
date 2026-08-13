@@ -12,6 +12,7 @@ from quantverify.implementation_registry.registry import (
     ImplementationRegistryIntegrityError,
     ResolvedImplementation,
     builtin_implementation_registry,
+    is_reviewed_runtime_dependency_cohort,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "StrategyImplementationRefV1",
     "builtin_implementation_registry",
     "implementation_code_hash_v1",
+    "is_reviewed_runtime_dependency_cohort",
 ]

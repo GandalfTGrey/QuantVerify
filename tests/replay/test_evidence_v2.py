@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import decimal
+import hashlib
+import json
+import subprocess
+import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -21,9 +25,13 @@ from quantverify.core.models import (
     ExperimentConfig,
     RuntimeContext,
     TimeRange,
+    ValidationConfig,
 )
 from quantverify.fixtures import BUILTIN_FIXTURE_ID, FixtureRegistry
-from quantverify.implementation_registry import builtin_implementation_registry
+from quantverify.implementation_registry import (
+    RuntimeDependencyRefV1,
+    builtin_implementation_registry,
+)
 from quantverify.metrics import (
     AnnualizationPolicy,
     ReturnBasis,
@@ -114,19 +122,51 @@ def evidence() -> FixtureRunEvidenceV2:
     ).evidence
 
 
+def test_importing_replay_does_not_import_strategy_or_engine_before_registry() -> None:
+    script = f"""
+import sys
+sys.path.insert(0, {str(Path(__file__).parents[2])!r})
+import quantverify.replay
+blocked = {{'quantverify.strategies.trend', 'quantverify.engines.reference'}}
+if blocked.intersection(sys.modules):
+    raise SystemExit(1)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+
+
 def test_projection_is_lossless_and_binary64_exact() -> None:
-    spec = fixture_spec()
+    base = fixture_spec()
+    spec = base.model_copy(
+        update={
+            "experiment": base.experiment.model_copy(
+                update={
+                    "validation": ValidationConfig(purge_bars=7, embargo_bars=3)
+                }
+            )
+        }
+    )
     projected = FixtureRunSpecEvidenceProjectionV1.from_domain(spec)
     rebuilt = projected.to_domain()
 
     assert projected.experiment.validation.train_fraction.bits == "3fe3333333333333"
     assert projected.experiment.validation.validation_fraction.bits == "3fc999999999999a"
     assert projected.experiment.validation.test_fraction.bits == "3fc999999999999a"
+    assert projected.experiment.validation.purge_bars == 7
+    assert projected.experiment.validation.embargo_bars == 3
     assert rebuilt == spec
     assert rebuilt.experiment.experiment_id == spec.experiment.experiment_id
     assert rebuilt.fixture_run_spec_id == spec.fixture_run_spec_id
     with pytest.raises(ValueError):
         Binary64ValueV1(bits="8000000000000000").to_float()
+    with pytest.raises(ValueError):
+        Binary64ValueV1(bits=" 3fe3333333333333 ")
 
     ulp = projected.model_copy(
         update={
@@ -161,12 +201,7 @@ def test_complete_fixture_replay_matches_exact_oracle_and_round_trips() -> None:
         "2.5.1": "21621da53ee981fbd028c0879938e58a56c0b61290858a2f54910e81ad07c889",
         "4.0.0": "cd99e98d9ce5e7fc97077ef94f634e66f29b0dfb28b26804e53eb577b2be707c",
     }
-    expected_evidence_hash = {
-        "2.5.1": "3636ab5adec96e2ca26005bf274945e54368daee5764096a6989147cadc76be6",
-        "4.0.0": "361dcf5c9059c0aa2f563e14d8443b7df9aa2ca9c5f0d62dd953a848c31214fc",
-    }
     assert result.metric_set_content_hash == expected_set_hash[decimal.__libmpdec_version__]
-    assert result.evidence_content_hash == expected_evidence_hash[decimal.__libmpdec_version__]
     assert tuple(str(point.equity) for point in result.reference_result.points) == (
         "10000",
         "10000",
@@ -179,18 +214,112 @@ def test_complete_fixture_replay_matches_exact_oracle_and_round_trips() -> None:
         "9592.926040649142471669924748",
     )
     document = canonical_fixture_run_evidence_v2_bytes(result)
-    expected_golden_file = (
-        Path(__file__).parent
-        / f"fixture_run_evidence_{decimal.__libmpdec_version__.replace('.', '_')}_golden.json"
+    cohort_key = tuple(
+        (dependency.package, dependency.version)
+        for dependency in result.strategy.runtime_dependencies
     )
-    expected_golden = expected_golden_file.read_bytes()
-    if expected_golden.endswith(b"\n"):
-        pytest.fail("fixture evidence golden must not contain a trailing newline")
-    assert document == expected_golden
+    assert cohort_key == tuple(
+        (dependency.package, dependency.version)
+        for dependency in result.engine.runtime_dependencies
+    )
+    expected_evidence_hash = _cohort_evidence_hashes()[cohort_key]
+    assert result.evidence_content_hash == expected_evidence_hash
+    assert hashlib.sha256(document).hexdigest() == expected_evidence_hash
     loaded = load_fixture_run_evidence_v2(document)
     assert loaded == result
     assert canonical_fixture_run_evidence_v2_bytes(loaded) == document
     assert replay_fixture_run_evidence_v2(loaded, runtime=runtime()).evidence == result
+
+
+def _cohort_evidence_hashes() -> dict[tuple[tuple[str, str], ...], str]:
+    values: dict[tuple[tuple[str, str], ...], str] = {}
+    for path in Path(__file__).parent.glob("fixture_run_evidence_*_golden.json"):
+        document = path.read_bytes()
+        if document.endswith(b"\n"):
+            pytest.fail("fixture evidence golden must not contain a trailing newline")
+        payload = json.loads(document)
+        key = tuple(
+            (dependency["package"], dependency["version"])
+            for dependency in payload["strategy"]["runtime_dependencies"]
+        )
+        values[key] = hashlib.sha256(document).hexdigest()
+    expected_distribution_versions = {
+        ("2.12.5", "2.41.5", "0.7.0", "4.15.0", "0.4.2", "2025.1"),
+        ("2.13.4", "2.46.4", "0.8.0", "4.16.0", "0.4.4", "2026.3"),
+    }
+    observed_cohorts = {
+        (
+            dict(key)["pydantic"],
+            dict(key)["pydantic-core"],
+            dict(key)["annotated-types"],
+            dict(key)["typing-extensions"],
+            dict(key)["typing-inspection"],
+            dict(key)["tzdata"],
+            dict(key)["python"],
+            dict(key)["libmpdec"],
+        )
+        for key in values
+    }
+    expected_cohorts = {
+        (*distributions, python_version, backend)
+        for distributions in expected_distribution_versions
+        for python_version in ("3.11", "3.12", "3.13")
+        for backend in ("2.5.1", "4.0.0")
+    }
+    assert observed_cohorts == expected_cohorts
+    return values
+
+
+def test_historical_full_cohort_goldens_remain_exact_canonical_documents() -> None:
+    for path in Path(__file__).parent.glob("fixture_run_evidence_*_golden.json"):
+        document = path.read_bytes()
+        if document.endswith(b"\n"):
+            pytest.fail("fixture evidence golden must not contain a trailing newline")
+        loaded = load_fixture_run_evidence_v2(document)
+        assert canonical_fixture_run_evidence_v2_bytes(loaded) == document
+
+
+def test_unknown_runtime_cohort_fails_at_identity_and_loader_boundaries() -> None:
+    original = evidence()
+    dependencies = tuple(
+        RuntimeDependencyRefV1(
+            package=item.package,
+            version="999.0.0" if item.package == "annotated-types" else item.version,
+        )
+        for item in original.strategy.runtime_dependencies
+    )
+    forged = original.model_copy(
+        update={
+            "strategy": original.strategy.model_copy(
+                update={"runtime_dependencies": dependencies}
+            ),
+            "engine": original.engine.model_copy(
+                update={"runtime_dependencies": dependencies}
+            ),
+        }
+    )
+    with pytest.raises(FixtureReplayIntegrityError, match="integrity validation"):
+        canonical_fixture_run_evidence_v2_bytes(forged)
+
+    document = canonical_fixture_run_evidence_v2_bytes(original)
+    observed_version = next(
+        item.version
+        for item in original.strategy.runtime_dependencies
+        if item.package == "annotated-types"
+    )
+    document = document.replace(
+        (
+            '"package":"annotated-types","schema_version":'
+            '"runtime-dependency-ref-v1","version":"'
+            f"{observed_version}\""
+        ).encode(),
+        (
+            b'"package":"annotated-types","schema_version":'
+            b'"runtime-dependency-ref-v1","version":"999.0.0"'
+        ),
+    )
+    with pytest.raises(FixtureReplayIntegrityError, match="integrity validation"):
+        load_fixture_run_evidence_v2(document)
 
 
 @pytest.mark.parametrize("field", ["run_id", "targets", "reference_result", "metric_set"])
@@ -242,6 +371,37 @@ def test_registry_and_nested_manifest_unsafe_copies_fail_closed() -> None:
     ):
         with pytest.raises(FixtureReplayIntegrityError, match="integrity validation"):
             replay_fixture_run_evidence_v2(forged, runtime=runtime())
+
+
+@pytest.mark.parametrize("field", ["bars", "points", "trades"])
+def test_evidence_rows_over_10000_fail_before_identity_or_replay(field: str) -> None:
+    original = evidence()
+    source = (
+        original.fixture_manifest.bundle
+        if field == "bars"
+        else original.reference_result
+    )
+    rows = getattr(source, field)
+    oversized = (rows * ((10_000 // len(rows)) + 1))[:10_001]
+    if field == "bars":
+        forged = original.model_copy(
+            update={
+                "fixture_manifest": original.fixture_manifest.model_copy(
+                    update={
+                        "bundle": original.fixture_manifest.bundle.model_copy(
+                            update={"bars": oversized}
+                        )
+                    }
+                )
+            }
+        )
+    else:
+        forged_result = original.reference_result.model_copy(update={field: oversized})
+        forged = original.model_copy(update={"reference_result": forged_result})
+    with pytest.raises(FixtureReplayIntegrityError, match="integrity validation"):
+        canonical_fixture_run_evidence_v2_bytes(forged)
+    with pytest.raises(FixtureReplayIntegrityError, match="integrity validation"):
+        replay_fixture_run_evidence_v2(forged, runtime=runtime())
 
 
 def test_runtime_and_full_bundle_contract_fail_closed() -> None:

@@ -1,6 +1,6 @@
 # ADR-0013：可重放 Metrics v2 与 Fixture Run Artifact v2
 
-- Status: Accepted (binary64 evidence projection amended 2026-08-13)
+- Status: Accepted (runtime-cohort evidence golden amendment under review 2026-08-13)
 - Date: 2026-08-13
 - Owner / Reviewer: S-5.6 / Dev-Lead、Q-Lead、independent architecture/QA
 - Depends on: ADR-0003, ADR-0008, ADR-0012
@@ -161,6 +161,9 @@ legacy DTO、再次 fresh validate，并要求重建后的 `experiment_id` 与 `
 不匹配时通过。该 projection 只是 legacy wire bridge：不得修改 `ValidationConfig`、`ExperimentConfig`、
 global identity 或既有 ID golden，也不得把 generic float 支持加入 canonical-json-v1。
 
+这里的完整 projection 包含 `ValidationConfig.purge_bars` 与 `embargo_bars`；这两个整数不是 binary64
+wrapper，但必须以 strict non-negative integer 逐字投影和反向重建。默认值为零也不得从 wire 省略。
+
 targets 的独立 identity 固定为 `fixture-target-positions-v1`：preimage 是 canonical-json-v1 编码的
 `{"schema_version":"fixture-target-positions-v1","targets":[...]}`，其中 targets 保持 evidence 中的完整
 有序顺序；`targets_content_hash` 是该 bytes 的完整 SHA-256。禁止对裸 tuple、排序后的 targets 或 generic
@@ -226,6 +229,12 @@ engine并逐字段比较完整 points/trades/result；随后由 MetricInputV2 fa
 任一步不相等都拒绝。自洽但非由注册实现生成的 targets/result/metrics 不是 replayed evidence；只有 B3 完成
 上述 runtime/manifest 三方绑定与 store-backed read 后才能返回 verified artifact。
 
+CORE-06B2 的 registry verification 与静态 strategy/engine import 只在 trusted process 内执行。每次 build/replay
+必须新建 built-in registry，且 public API 不接受 caller-supplied registry、callable、module 或 entrypoint。
+implementation registry 是 installed code-closure integrity gate，不防御任意篡改正在运行的 Python process；
+进程隔离是可选后续 hardening，不属于本版本的 authority claim。B2 输出始终只是
+`replayed-not-store-verified`，只有 B3 能建立 verified artifact authority。
+
 artifact content 不包含 `created_at`、store root、hostname 或绝对路径。v2 仍只适用于小型 fixture
 JSON，不替代未来真实数据的 Parquet/DuckDB artifact 设计。
 
@@ -250,7 +259,12 @@ SHA-256；不允许调用 generic `stable_hash/canonicalize` 或由外部传入 
 JSON 完整验证、重建 DTO 后，必须以同一 profile 重新序列化并要求与原始 bytes
 逐字相等，再计算 SHA-256；语义相同但 key order、whitespace、escape、Unicode normalization、integer spelling
 或尾随字节不同均是 noncanonical。CORE-06A/B 必须为 MetricInputV2、MetricSetV2、evidence 和 manifest 各固定
-至少一个完整 canonical bytes/SHA-256 golden，并在 Python 3.11/3.12/3.13 上逐字一致。
+至少一个完整 canonical bytes/SHA-256 golden。`MetricInputV2` 与 legacy binary64 spec projection 不含
+implementation/runtime cohort，必须在所有 reviewed cohorts 间逐字一致。`MetricSetV2` 按 exact calculator
+backend ref 固定 golden；`FixtureRunEvidenceV2` 按完整 B1 runtime cohort（精确 distribution tuple、Python
+major.minor、libmpdec）固定 golden。同一 exact cohort 与相同 deterministic inputs 必须跨重放逐字一致；不同
+reviewed cohort 必须因其嵌入的 runtime dependency/backend refs 产生不同 identity，并各自具有批准的 full
+golden。manifest 仅在包括 runtime 与 created_at 在内的所有 manifest inputs 完全相同时逐字一致。
 
 MetricInputV2 与 MetricSetV2 的 standalone canonical loader 属于 CORE-06A；evidence、manifest 和 version
 dispatcher loader 属于 CORE-06B。standalone MetricSetV2 只表示带完整 identity 的确定性结果 DTO，不是
@@ -358,8 +372,10 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
 16. implementation registry 的固定 uint64 wire-format golden 必须跨 Python 版本一致；修改任一声明 helper/resource
     都改变 code hash，未声明项目内 import/resource、动态 import、缺失 source 或仅 `.pyc` 的环境不得生成或重放
     verified evidence。
-17. MetricInputV2、MetricSetV2、evidence 和 manifest 的 canonical JSON golden 都在 Python 3.11/3.12/3.13
-    逐 byte/hash 一致；datetime offset/`+00:00`/精度替代、date compact/ordinal/datetime 冒充、key order、
+17. MetricInputV2 与 binary64 spec projection 的 canonical JSON golden 在所有 reviewed cohorts 间逐
+    byte/hash 一致；MetricSetV2 按 exact calculator backend、evidence 按完整 reviewed B1 runtime cohort、manifest
+    按包括 runtime/created_at 在内的完整 inputs 分别固定 full bytes/hash。同一 cohort/input 必须逐字一致，
+    不同 cohort 必须 identity distinct 且不能用彼此 golden 冒充。datetime offset/`+00:00`/精度替代、date compact/ordinal/datetime 冒充、key order、
     whitespace、Unicode escape/normalization、非法 surrogate、integer representation 或尾随字节变化均拒绝。CAGR elapsed-days golden 必须证明只使用
     `last_session - first_session` 的日历日差。
 18. legacy `ValidationConfig(0.6, 0.2, 0.2)` 的完整 spec projection bytes/hash 跨 Python 3.11/3.12/3.13
