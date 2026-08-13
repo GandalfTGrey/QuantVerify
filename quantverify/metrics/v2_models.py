@@ -10,19 +10,20 @@ from fractions import Fraction
 from itertools import pairwise
 from typing import Annotated, Final, Literal
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import BeforeValidator, Field, StrictInt, model_validator
 
 from quantverify.core.enums import BarFrequency
 from quantverify.core.models import SessionSchedule
 from quantverify.metrics.models import (
-    AnnualizationPolicy,
     MetricModel,
-    MetricValue,
+    MetricReason,
+    MetricStatus,
     ReturnBasis,
-    RiskFreePolicy,
+    RiskFreeRateKind,
 )
 from quantverify.metrics.v2_identity import (
     MetricV2ContractError,
+    parse_decimal_value_v1,
     require_v2_decimal,
     v2_content_hash,
 )
@@ -31,7 +32,11 @@ MAX_V2_ROWS: Final = 10_000
 MAX_RATIONAL_BITS: Final = 4_096
 SUPPORTED_LIBMPDEC_VERSIONS: Final = frozenset({"2.5.1", "4.0.0"})
 
-V2Decimal = Annotated[Decimal, Field(allow_inf_nan=False)]
+V2Decimal = Annotated[
+    Decimal,
+    BeforeValidator(parse_decimal_value_v1),
+    Field(strict=True, allow_inf_nan=False),
+]
 
 
 class EquityObservationV2(MetricModel):
@@ -87,6 +92,60 @@ class DecimalContextV1(MetricModel):
     clamped_trap: Literal[False] = False
 
 
+class AnnualizationPolicyV2(MetricModel):
+    policy_id: str = Field(min_length=1, max_length=128)
+    periods_per_year: V2Decimal
+    days_per_year: V2Decimal
+
+    @model_validator(mode="after")
+    def validate_positive_values(self) -> AnnualizationPolicyV2:
+        for value in (self.periods_per_year, self.days_per_year):
+            require_v2_decimal(value)
+            if value <= 0:
+                raise ValueError("annualization values must be positive")
+        return self
+
+
+class RiskFreePolicyV2(MetricModel):
+    policy_id: str = Field(min_length=1, max_length=128)
+    kind: RiskFreeRateKind
+    rate: V2Decimal
+    source_id: str = Field(min_length=1, max_length=128)
+    source_version: str = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_rate(self) -> RiskFreePolicyV2:
+        require_v2_decimal(self.rate)
+        if self.rate <= Decimal("-1"):
+            raise ValueError("risk-free rate must be greater than -1")
+        return self
+
+
+class MetricValueV2(MetricModel):
+    status: MetricStatus
+    value: V2Decimal | None = None
+    reason: MetricReason | None = None
+
+    @model_validator(mode="after")
+    def validate_state(self) -> MetricValueV2:
+        undefined_reasons = {
+            MetricReason.INSUFFICIENT_EQUITY_OBSERVATIONS,
+            MetricReason.INSUFFICIENT_RETURN_OBSERVATIONS,
+            MetricReason.NON_POSITIVE_ELAPSED_TIME,
+            MetricReason.ZERO_VOLATILITY,
+        }
+        if self.status is MetricStatus.VALID:
+            if self.value is None or self.reason is not None:
+                raise ValueError("valid metric requires a value and no reason")
+            require_v2_decimal(self.value)
+        elif self.status is MetricStatus.UNDEFINED:
+            if self.value is not None or self.reason not in undefined_reasons:
+                raise ValueError("undefined metric state is invalid")
+        elif self.value is not None or self.reason is not MetricReason.NUMERIC_ERROR:
+            raise ValueError("failure metric state is invalid")
+        return self
+
+
 class MetricCalculatorRef(MetricModel):
     calculator_id: Literal["quantverify-metrics-v2"] = "quantverify-metrics-v2"
     calculator_version: Literal["1"] = "1"
@@ -112,9 +171,9 @@ class MetricInputV2(MetricModel):
     frequency: Literal[BarFrequency.DAY] = BarFrequency.DAY
     schedule: SessionSchedule
     return_basis: ReturnBasis
-    annualization: AnnualizationPolicy
+    annualization: AnnualizationPolicyV2
     volatility_ddof: StrictInt = Field(ge=0)
-    risk_free: RiskFreePolicy
+    risk_free: RiskFreePolicyV2
     opening_equity_convention: Literal["first-close-flat-v1"] = "first-close-flat-v1"
     return_derivation_id: Literal["equity-ratio-rational"] = "equity-ratio-rational"
     return_derivation_version: Literal["1"] = "1"
@@ -130,9 +189,9 @@ class MetricInputV2(MetricModel):
         *,
         schedule: SessionSchedule,
         return_basis: ReturnBasis,
-        annualization: AnnualizationPolicy,
+        annualization: AnnualizationPolicyV2,
         volatility_ddof: int,
-        risk_free: RiskFreePolicy,
+        risk_free: RiskFreePolicyV2,
         equity: tuple[EquityObservationV2, ...],
     ) -> MetricInputV2:
         failed = False
@@ -140,6 +199,10 @@ class MetricInputV2(MetricModel):
         try:
             if not isinstance(equity, tuple) or not 2 <= len(equity) <= MAX_V2_ROWS:
                 raise ValueError("Metrics v2 equity row count is invalid")
+            if type(annualization) is not AnnualizationPolicyV2:
+                raise TypeError("Metrics v2 requires its strict annualization policy")
+            if type(risk_free) is not RiskFreePolicyV2:
+                raise TypeError("Metrics v2 requires its strict risk-free policy")
             if not isinstance(schedule.sessions, tuple):
                 raise ValueError("Metrics v2 schedule sessions must remain immutable")
             validated_equity = tuple(
@@ -153,11 +216,11 @@ class MetricInputV2(MetricModel):
             result = cls(
                 schedule=SessionSchedule.model_validate(schedule.model_dump(mode="python")),
                 return_basis=return_basis,
-                annualization=AnnualizationPolicy.model_validate(
+                annualization=AnnualizationPolicyV2.model_validate(
                     annualization.model_dump(mode="python")
                 ),
                 volatility_ddof=volatility_ddof,
-                risk_free=RiskFreePolicy.model_validate(risk_free.model_dump(mode="python")),
+                risk_free=RiskFreePolicyV2.model_validate(risk_free.model_dump(mode="python")),
                 equity=validated_equity,
                 returns=returns,
             )
@@ -173,10 +236,10 @@ class MetricInputV2(MetricModel):
     def validate_complete_trajectory(self) -> MetricInputV2:
         self._require_immutable_sequences()
         schedule = SessionSchedule.model_validate(self.schedule.model_dump(mode="python"))
-        annualization = AnnualizationPolicy.model_validate(
+        annualization = AnnualizationPolicyV2.model_validate(
             self.annualization.model_dump(mode="python")
         )
-        risk_free = RiskFreePolicy.model_validate(self.risk_free.model_dump(mode="python"))
+        risk_free = RiskFreePolicyV2.model_validate(self.risk_free.model_dump(mode="python"))
         equity = tuple(
             EquityObservationV2.model_validate(item.model_dump(mode="python"))
             for item in self.equity
@@ -235,11 +298,11 @@ class MetricSetV2(MetricModel):
     metric_set_version: Literal["metrics-v2"] = "metrics-v2"
     metric_input_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     calculator: MetricCalculatorRef
-    total_return: MetricValue
-    cagr: MetricValue
-    volatility: MetricValue
-    sharpe: MetricValue
-    max_drawdown: MetricValue
+    total_return: MetricValueV2
+    cagr: MetricValueV2
+    volatility: MetricValueV2
+    sharpe: MetricValueV2
+    max_drawdown: MetricValueV2
 
     @model_validator(mode="after")
     def validate_nested_models(self) -> MetricSetV2:
@@ -251,7 +314,7 @@ class MetricSetV2(MetricModel):
             self.sharpe,
             self.max_drawdown,
         ):
-            MetricValue.model_validate(result.model_dump(mode="python"))
+            MetricValueV2.model_validate(result.model_dump(mode="python"))
         return self
 
     @property
@@ -268,7 +331,6 @@ class MetricSetV2(MetricModel):
                 "Metrics v2 output failed integrity validation"
             ) from None
         return result
-
 
 def _rational_return(
     previous: EquityObservationV2,

@@ -25,7 +25,6 @@ from pydantic import ValidationError
 from quantverify.metrics.models import (
     MetricReason,
     MetricStatus,
-    MetricValue,
     RiskFreeRateKind,
 )
 from quantverify.metrics.v2_identity import MetricV2ContractError, require_v2_decimal
@@ -33,6 +32,7 @@ from quantverify.metrics.v2_models import (
     MetricCalculatorRef,
     MetricInputV2,
     MetricSetV2,
+    MetricValueV2,
 )
 
 _ONE = Decimal("1")
@@ -113,7 +113,7 @@ def _decimal_context(ref: MetricCalculatorRef) -> Context:
     return context
 
 
-def _total_return(metric_input: MetricInputV2, context: Context) -> MetricValue:
+def _total_return(metric_input: MetricInputV2, context: Context) -> MetricValueV2:
     try:
         with localcontext(context) as active:
             active.clear_flags()
@@ -124,7 +124,7 @@ def _total_return(metric_input: MetricInputV2, context: Context) -> MetricValue:
         return _failure()
 
 
-def _cagr(metric_input: MetricInputV2, context: Context) -> MetricValue:
+def _cagr(metric_input: MetricInputV2, context: Context) -> MetricValueV2:
     first = metric_input.equity[0]
     last = metric_input.equity[-1]
     elapsed_days = (last.observed_on - first.observed_on).days
@@ -154,7 +154,7 @@ def _decimal_returns(metric_input: MetricInputV2, context: Context) -> tuple[Dec
 def _volatility_and_mean(
     metric_input: MetricInputV2,
     context: Context,
-) -> tuple[MetricValue, Decimal | None]:
+) -> tuple[MetricValueV2, Decimal | None]:
     count = len(metric_input.returns)
     if count <= metric_input.volatility_ddof:
         return _undefined(MetricReason.INSUFFICIENT_RETURN_OBSERVATIONS), None
@@ -178,10 +178,10 @@ def _volatility_and_mean(
 
 def _sharpe(
     metric_input: MetricInputV2,
-    volatility: MetricValue,
+    volatility: MetricValueV2,
     mean: Decimal | None,
     context: Context,
-) -> MetricValue:
+) -> MetricValueV2:
     if volatility.status is MetricStatus.FAILURE:
         return _failure()
     if volatility.status is MetricStatus.UNDEFINED or mean is None:
@@ -209,7 +209,7 @@ def _sharpe(
         return _failure()
 
 
-def _maximum_drawdown(metric_input: MetricInputV2, context: Context) -> MetricValue:
+def _maximum_drawdown(metric_input: MetricInputV2, context: Context) -> MetricValueV2:
     try:
         with localcontext(context) as active:
             active.clear_flags()
@@ -226,14 +226,14 @@ def _maximum_drawdown(metric_input: MetricInputV2, context: Context) -> MetricVa
         return _failure()
 
 
-def _valid(value: Decimal) -> MetricValue:
+def _valid(value: Decimal) -> MetricValueV2:
     require_v2_decimal(value)
-    return MetricValue(status=MetricStatus.VALID, value=value)
+    return MetricValueV2(status=MetricStatus.VALID, value=value)
 
 
-def _undefined(reason: MetricReason) -> MetricValue:
-    return MetricValue(status=MetricStatus.UNDEFINED, reason=reason)
+def _undefined(reason: MetricReason) -> MetricValueV2:
+    return MetricValueV2(status=MetricStatus.UNDEFINED, reason=reason)
 
 
-def _failure() -> MetricValue:
-    return MetricValue(status=MetricStatus.FAILURE, reason=MetricReason.NUMERIC_ERROR)
+def _failure() -> MetricValueV2:
+    return MetricValueV2(status=MetricStatus.FAILURE, reason=MetricReason.NUMERIC_ERROR)

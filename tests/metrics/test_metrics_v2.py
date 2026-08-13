@@ -4,6 +4,7 @@ import decimal
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal, getcontext, localcontext
 from fractions import Fraction
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -12,20 +13,26 @@ from quantverify.core.enums import SessionLabelPolicy
 from quantverify.core.models import CalendarArtifactRef, SessionSchedule, TradingSession
 from quantverify.metrics import (
     AnnualizationPolicy,
+    AnnualizationPolicyV2,
     EquityObservationV2,
     MetricCalculatorRef,
     MetricInputV2,
     MetricReason,
     MetricStatus,
     MetricV2ContractError,
+    MetricValueV2,
     RationalReturnObservation,
     ReturnBasis,
     RiskFreePolicy,
+    RiskFreePolicyV2,
     RiskFreeRateKind,
     calculate_metric_set_v2,
     canonical_v2_bytes,
     decimal_value_v1,
+    load_metric_input_v2,
+    load_metric_set_v2,
 )
+from quantverify.metrics.v2_identity import MAX_V2_JSON_NESTING, canonicalize_v2
 
 
 def schedule_for(*sessions: date) -> SessionSchedule:
@@ -64,8 +71,8 @@ def schedule_for(*sessions: date) -> SessionSchedule:
     )
 
 
-def annualization(*, periods: str = "2", days: str = "365") -> AnnualizationPolicy:
-    return AnnualizationPolicy(
+def annualization(*, periods: str = "2", days: str = "365") -> AnnualizationPolicyV2:
+    return AnnualizationPolicyV2(
         policy_id="two-period-v1",
         periods_per_year=Decimal(periods),
         days_per_year=Decimal(days),
@@ -76,8 +83,8 @@ def risk_free(
     *,
     rate: str = "0",
     kind: RiskFreeRateKind = RiskFreeRateKind.PER_OBSERVATION_SIMPLE,
-) -> RiskFreePolicy:
-    return RiskFreePolicy(
+) -> RiskFreePolicyV2:
+    return RiskFreePolicyV2(
         policy_id="fixed-rate-v1",
         kind=kind,
         rate=Decimal(rate),
@@ -91,8 +98,8 @@ def metric_input_v2(
     sessions: tuple[date, ...],
     *,
     ddof: int = 0,
-    annual: AnnualizationPolicy | None = None,
-    rf: RiskFreePolicy | None = None,
+    annual: AnnualizationPolicyV2 | None = None,
+    rf: RiskFreePolicyV2 | None = None,
 ) -> MetricInputV2:
     return MetricInputV2.from_equity(
         schedule=schedule_for(*sessions),
@@ -128,6 +135,16 @@ def test_hand_calculated_metrics_and_exact_rational_returns() -> None:
         "4.0.0": "776a97a44552a159ae8ba33ed464acb8b2fef2b7269b86c4af3a08c109744d34",
     }
     assert result.content_hash == expected_set_hash[result.calculator.backend_version]
+    golden_root = Path(__file__).parent
+    assert canonical_v2_bytes(source) == (
+        golden_root / "metrics_v2_input_golden.json"
+    ).read_bytes()
+    assert canonical_v2_bytes(result) == (
+        golden_root
+        / f"metrics_v2_set_{result.calculator.backend_version.replace('.', '_')}_golden.json"
+    ).read_bytes()
+    assert load_metric_input_v2(canonical_v2_bytes(source)) == source
+    assert load_metric_set_v2(canonical_v2_bytes(result)) == result
 
 
 def test_ddof_and_risk_free_change_the_declared_calculation() -> None:
@@ -253,6 +270,29 @@ def test_decimal_canonical_payload_converges_scale_and_signed_zero() -> None:
     assert plain.content_hash == scaled.content_hash
 
 
+def test_year_one_date_and_datetime_wire_values_are_fixed_width() -> None:
+    assert canonicalize_v2(date(1, 1, 1)) == "0001-01-01"
+    assert canonicalize_v2(datetime(1, 1, 1, 2, 3, 4, 5, tzinfo=UTC)) == (
+        "0001-01-01T02:03:04.000005Z"
+    )
+
+    source = MetricInputV2.from_equity(
+        schedule=schedule_for(date(1, 1, 1), date(1, 1, 2)),
+        return_basis=ReturnBasis.NET_OF_COSTS,
+        annualization=annualization(),
+        volatility_ddof=0,
+        risk_free=risk_free(),
+        equity=(
+            EquityObservationV2(observed_on=date(1, 1, 1), equity=Decimal("100")),
+            EquityObservationV2(observed_on=date(1, 1, 2), equity=Decimal("101")),
+        ),
+    )
+    encoded = canonical_v2_bytes(source)
+    assert b'"requested_start":"0001-01-01"' in encoded
+    assert b'"session_open_at":"0001-01-01T14:30:00.000000Z"' in encoded
+    assert load_metric_input_v2(encoded) == source
+
+
 def test_schedule_offset_equivalence_preserves_input_identity() -> None:
     sessions = (date(2024, 1, 2), date(2025, 1, 1))
     original = metric_input_v2(("100", "110"), sessions)
@@ -343,6 +383,16 @@ def test_unsafe_schedule_and_output_cannot_cross_identity_boundaries() -> None:
     with pytest.raises(MetricV2ContractError, match="canonical serialization"):
         canonical_v2_bytes(unsafe_result)
 
+    changed_value = result.model_copy(
+        update={
+            "total_return": result.total_return.model_copy(
+                update={"value": Decimal("999")}
+            )
+        }
+    )
+    assert changed_value.content_hash != result.content_hash
+    assert canonical_v2_bytes(changed_value) != canonical_v2_bytes(result)
+
 
 def test_canonical_boundary_rejects_invalid_unicode_without_exposing_input() -> None:
     sessions = (date(2024, 1, 2), date(2025, 1, 1))
@@ -359,6 +409,94 @@ def test_canonical_boundary_rejects_invalid_unicode_without_exposing_input() -> 
     assert "SECRET" not in str(error)
     assert error.__cause__ is None
     assert error.__context__ is None
+
+
+def test_canonical_loader_rejects_noncanonical_and_duplicate_bytes() -> None:
+    sessions = (date(2024, 1, 2), date(2025, 1, 1))
+    source = metric_input_v2(("100", "110"), sessions)
+    encoded = canonical_v2_bytes(source)
+    invalid_documents = (
+        b" " + encoded,
+        encoded + b"\n",
+        encoded.replace(
+            b'"schema_version":',
+            b'"schema_version":"duplicate","schema_version":',
+            1,
+        ),
+        encoded.replace(
+            b'"coefficient":"1","exponent":2',
+            b'"coefficient":"10","exponent":1',
+            1,
+        ),
+    )
+    for document in invalid_documents:
+        with pytest.raises(
+            MetricV2ContractError,
+            match="canonical document failed integrity validation",
+        ) as captured:
+            load_metric_input_v2(document)
+        assert captured.value.__cause__ is None
+        assert captured.value.__context__ is None
+
+
+def test_canonical_loader_bounds_nesting_without_counting_string_brackets() -> None:
+    sessions = (date(2024, 1, 2), date(2025, 1, 1))
+    deep = (
+        b"{"
+        + b'"x":{' * MAX_V2_JSON_NESTING
+        + b'"x":0'
+        + b"}" * (MAX_V2_JSON_NESTING + 1)
+    )
+    with pytest.raises(MetricV2ContractError, match="canonical document"):
+        load_metric_input_v2(deep)
+
+    bracketed = metric_input_v2(
+        ("100", "110"),
+        sessions,
+        annual=AnnualizationPolicyV2(
+            policy_id='[{"escaped":"\\\"}"}]',
+            periods_per_year=Decimal("2"),
+            days_per_year=Decimal("365"),
+        ),
+    )
+    assert load_metric_input_v2(canonical_v2_bytes(bracketed)) == bracketed
+
+    result = calculate_metric_set_v2(metric_input_v2(("100", "110"), sessions))
+    huge_exponent = canonical_v2_bytes(result).replace(
+        b'"exponent":-1',
+        b'"exponent":1000000000000000000000000000000',
+        1,
+    )
+    with pytest.raises(MetricV2ContractError, match="canonical document") as captured:
+        load_metric_set_v2(huge_exponent)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+def test_v1_policy_objects_cannot_cross_the_strict_v2_factory() -> None:
+    sessions = (date(2024, 1, 2), date(2025, 1, 1))
+    with pytest.raises(MetricV2ContractError, match="integrity validation"):
+        MetricInputV2.from_equity(
+            schedule=schedule_for(*sessions),
+            return_basis=ReturnBasis.NET_OF_COSTS,
+            annualization=AnnualizationPolicy(
+                policy_id="legacy",
+                periods_per_year=1.1,
+                days_per_year=365.0,
+            ),  # type: ignore[arg-type]
+            volatility_ddof=0,
+            risk_free=RiskFreePolicy(
+                policy_id="legacy",
+                kind=RiskFreeRateKind.PER_OBSERVATION_SIMPLE,
+                rate=0.1,
+                source_id="legacy",
+                source_version="1",
+            ),  # type: ignore[arg-type]
+            equity=(
+                EquityObservationV2(observed_on=sessions[0], equity=Decimal("100")),
+                EquityObservationV2(observed_on=sessions[1], equity=Decimal("101")),
+            ),
+        )
 
 
 def test_factory_rejects_bool_ddof_at_the_public_boundary() -> None:
@@ -413,6 +551,44 @@ def test_mutable_observations_and_unrelated_models_cannot_be_canonicalized() -> 
 
 
 def test_decimal_and_rational_resource_limits_fail_before_identity() -> None:
+    for invalid in (1.1, "1.1", True):
+        with pytest.raises(ValidationError):
+            EquityObservationV2(
+                observed_on=date(2024, 1, 2),
+                equity=invalid,  # type: ignore[arg-type]
+            )
+    for policy_type, field_name in (
+        (AnnualizationPolicyV2, "periods_per_year"),
+        (RiskFreePolicyV2, "rate"),
+    ):
+        payload: dict[str, object]
+        if policy_type is AnnualizationPolicyV2:
+            payload = {
+                "policy_id": "strict",
+                "periods_per_year": Decimal("2"),
+                "days_per_year": Decimal("365"),
+            }
+        else:
+            payload = {
+                "policy_id": "strict",
+                "kind": RiskFreeRateKind.PER_OBSERVATION_SIMPLE,
+                "rate": Decimal("0"),
+                "source_id": "test",
+                "source_version": "1",
+            }
+        payload[field_name] = 1.1
+        with pytest.raises(ValidationError):
+            policy_type.model_validate(payload)
+    with pytest.raises(ValidationError, match="coefficient digit"):
+        MetricValueV2(
+            status=MetricStatus.VALID,
+            value=Decimal("1" * 65),
+        )
+    with pytest.raises(ValidationError, match="adjusted exponent"):
+        MetricValueV2(
+            status=MetricStatus.VALID,
+            value={"coefficient": "1", "exponent": 10**100},  # type: ignore[arg-type]
+        )
     with pytest.raises(ValidationError, match="coefficient digit"):
         EquityObservationV2(
             observed_on=date(2024, 1, 2),
