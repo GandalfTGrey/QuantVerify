@@ -145,10 +145,18 @@ spec consumed-session identity、cost bps、initial cash 与 metric policy 都�
 
 两个 implementation registry 都固定使用 `implementation-registry-v1` schema。`code_hash` 是 release/build
 时对 registry 条目所列、按 POSIX 相对路径逐字排序的 UTF-8 Python source bytes 计算的 SHA-256：payload 依次为
-每个 path 的 UTF-8 byte length、path bytes、content byte length、content bytes；不得依赖 checkout 绝对路径、
-mtime、wheel location 或动态源码发现。受支持 path allowlist 本身属于 registry entry 并进入 entry identity。
-wheel build 必须生成并打包已审 registry；运行时只验证已安装 bytes 与 pinned hash，不扫描新 module、不动态
-import 任意名称，也不允许调用方填写新 code hash。
+每个 path 的 UTF-8 byte length、path bytes、content byte length、content bytes；两个 length 都使用 exactly
+8-byte unsigned big-endian (`uint64`)。path 必须是无重复、strict ASCII/POSIX relative、无空 segment、`.`、
+`..`、反斜杠、控制字符、percent encoding、绝对路径或 symlink 的规范值。不得依赖 checkout 绝对路径、mtime、
+wheel location 或动态源码发现。
+
+受支持 path allowlist 本身属于 registry entry 并进入 entry identity，而且必须等于该 adapter/engine 执行路径的
+全部项目内 Python source 与项目内运行时 resource 的 reviewed static transitive closure，而不是任选的文件子集。
+构建时对 import graph/resource accesses 做 allowlist 检查；执行中遇到任何未声明 QuantVerify import/resource、
+import hook、动态 import 或运行时代码生成均 fail closed。第三方运行时依赖必须由独立、typed、版本化 ref 绑定；
+不得把它们静默排除后仍声称 code closure 完整。wheel build 必须生成并打包已审 registry以及 closure 中的 `.py`
+source/resource；source 缺失、只剩 `.pyc` 或 installed bytes/hash 不匹配均 fail closed。运行时只验证这些 installed
+bytes 与 pinned hash，不扫描新 module，也不允许调用方填写新 code hash。
 
 Validator 必须证明：spec 与 manifest 的 fixture/dataset/content/schedule identities 一致；bars、targets、
 points、trades 的 asset/session/timestamps 一致；result 的 initial cash/costs 与 spec 一致；metrics equity
@@ -258,6 +266,9 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
     扩展名）均拒绝；等价 UTC instant 只生成同一规范 stamp，非法日期或时间不得通过。
 15. manifest 在 2 MiB 与 nesting 32 的边界内通过，越界、深层嵌套、malformed/duplicate/unknown JSON、
     short read 和 hostile regular-file nodes 均固定 typed、无输入泄漏地拒绝；evidence 32 MiB 边界同样验证。
+16. implementation registry 的固定 uint64 wire-format golden 必须跨 Python 版本一致；修改任一声明 helper/resource
+    都改变 code hash，未声明项目内 import/resource、动态 import、缺失 source 或仅 `.pyc` 的环境不得生成或重放
+    verified evidence。
 
 ## Deferred / Non-goals
 
