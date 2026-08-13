@@ -179,9 +179,12 @@ engine并逐字段比较完整 points/trades/result；随后由 MetricInputV2 fa
 artifact content 不包含 `created_at`、store root、hostname 或绝对路径。v2 仍只适用于小型 fixture
 JSON，不替代未来真实数据的 Parquet/DuckDB artifact 设计。
 
-所有 v2 evidence 与 manifest bytes 复用唯一 `canonical-json-v1` profile：先通过 v2 专用、纯递归的
+所有 v2 DTO identity/bytes——包括 `MetricInputV2.content_hash`、`MetricSetV2.content_hash`、
+`FixtureRunEvidenceV2.evidence_content_hash` 与 manifest hash——复用唯一 `canonical-json-v1` profile：先通过 v2 专用、纯递归的
 `canonicalize_v2()` 将已验证 DTO 转成只含 JSON object/array/string/integer/boolean/null 的 payload；root 必须是 object，mapping key
-必须是 string，tuple/sequence 转为 array，datetime 必须在进入 serializer 前按字段契约规范为 UTC，Decimal
+必须是 string，tuple/sequence 转为 array。每个 datetime wire value 必须是 aware instant 转 UTC 后严格以
+`%Y-%m-%dT%H:%M:%S.%fZ` 输出的 ASCII string，始终包含六位微秒；parser 要求真实日历/时分秒并逐字
+round-trip，拒绝其他 offset、`+00:00`、小写 `z`、缺失/不同小数精度或等价替代拼写。Decimal
 必须先转为本 ADR 定义的 `decimal-value-v1` object，禁止裸 float 与非有限数。该规则递归覆盖 evidence 中的
 **每一个** Decimal，包括 FixtureRunSpec initial cash/cost bps、TargetPosition、ReferenceResult 的 price/quantity/
 cash/equity/trade cost，以及 MetricInput/MetricSet；不能只处理指标字段，也不能直接沿用项目 generic
@@ -190,7 +193,9 @@ cash/equity/trade cost，以及 MetricInput/MetricSet；不能只处理指标字
 UTF-8 编码且不加 BOM、尾换行或额外 whitespace。string 使用 Python JSON 的确定 escape 规则；禁止未配对
 surrogate，Unicode 不做隐式 NFC/NFKC normalization。
 
-loader 对 duplicate-key-free JSON 完整验证、重建 DTO 后，必须以同一 profile 重新序列化并要求与原始 bytes
+每个 standalone v2 DTO 在计算 content hash 前都必须完整重验证，以该 profile 生成 canonical bytes，再取完整
+SHA-256；不允许调用 generic `stable_hash/canonicalize` 或由外部传入 detached hash。loader 对 duplicate-key-free
+JSON 完整验证、重建 DTO 后，必须以同一 profile 重新序列化并要求与原始 bytes
 逐字相等，再计算 SHA-256；语义相同但 key order、whitespace、escape、Unicode normalization、integer spelling
 或尾随字节不同均是 noncanonical。CORE-06A/B 必须为 MetricInputV2、MetricSetV2、evidence 和 manifest 各固定
 至少一个完整 canonical bytes/SHA-256 golden，并在 Python 3.11/3.12/3.13 上逐字一致。
@@ -292,9 +297,10 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
 16. implementation registry 的固定 uint64 wire-format golden 必须跨 Python 版本一致；修改任一声明 helper/resource
     都改变 code hash，未声明项目内 import/resource、动态 import、缺失 source 或仅 `.pyc` 的环境不得生成或重放
     verified evidence。
-17. v2 canonical JSON golden 在 Python 3.11/3.12/3.13 逐 byte/hash 一致；key order、whitespace、Unicode escape/
-    normalization、非法 surrogate、integer representation 或尾随字节变化均拒绝。CAGR elapsed-days golden 必须
-    证明只使用 `last_session - first_session` 的日历日差。
+17. MetricInputV2、MetricSetV2、evidence 和 manifest 的 canonical JSON golden 都在 Python 3.11/3.12/3.13
+    逐 byte/hash 一致；datetime offset/`+00:00`/精度替代、key order、whitespace、Unicode escape/normalization、
+    非法 surrogate、integer representation 或尾随字节变化均拒绝。CAGR elapsed-days golden 必须证明只使用
+    `last_session - first_session` 的日历日差。
 
 ## Deferred / Non-goals
 
