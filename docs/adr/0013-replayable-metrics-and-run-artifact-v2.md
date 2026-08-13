@@ -62,8 +62,11 @@ session/count 必须逐项、逐序等于 schedule 的全部 sessions，并且 o
 evidence 层对应的完整 result points/bars 交叉验证。MetricInput content identity 覆盖 frequency、完整 calendar
 artifact、schedule requested range、ordered sessions、schedule id/content hash、完整有序 equity、完整 rational
 returns、全部 policy 和 derivation version；
-Decimal identity 使用明确 payload：零恒为字符串 `0`；非零为 sign、删除 coefficient 末尾零后的十进制
-digits、同步增加后的 exponent。它不调用 `normalize()`，等值 scale 与 signed zero 收敛。
+Decimal identity 使用 `decimal-value-v1` 的明确 JSON object：
+`{"coefficient":"<signed base-10 integer>","exponent":<base-10 integer>}`，数值精确等于
+`coefficient * 10**exponent`。零恒为 `{"coefficient":"0","exponent":0}`；非零 coefficient 无前导零，
+负号只允许位于 coefficient 首字符，删除 coefficient 末尾零时 exponent 同步增加。它从 `as_tuple()` 构造，
+不调用 `normalize()` 或任何 Decimal arithmetic；因此等值 scale 与 signed zero 收敛。
 
 ### 3. Metric calculator v2 使用固定数值环境
 
@@ -98,6 +101,10 @@ rational 转 Decimal 固定为按 observation 顺序执行 `Decimal(numerator) /
 调用顺序和异常映射属于 calculator version。InvalidOperation/DivisionByZero/Overflow 为
 `FAILURE / numeric_error`；样本不足、非正 elapsed time、zero volatility 保持 `UNDEFINED` 的稳定 reason；terminal
 bankruptcy 的 total/CAGR/max-drawdown 为有效 `-1`，其后不得计算复活路径。
+
+CAGR 的 elapsed days 固定为 `(last_session - first_session).days`，不含额外的首尾日加一；`years` 固定为
+`Decimal(elapsed_days) / Decimal(days_per_year)` 并在上述 context/顺序内计算。elapsed days 非正按前述
+`UNDEFINED` reason 处理，不能从 timestamp wall-clock、session count 或自然年数量另行推导。
 
 `MetricSetV2` 必须绑定 `metric_input_content_hash` 和完整 calculator ref，并保持 VALID、UNDEFINED、
 FAILURE 状态矩阵。其 content identity 覆盖所有结果。Calculator 输出前重验证 input；artifact 接受前
@@ -171,6 +178,22 @@ engine并逐字段比较完整 points/trades/result；随后由 MetricInputV2 fa
 
 artifact content 不包含 `created_at`、store root、hostname 或绝对路径。v2 仍只适用于小型 fixture
 JSON，不替代未来真实数据的 Parquet/DuckDB artifact 设计。
+
+所有 v2 evidence 与 manifest bytes 复用唯一 `canonical-json-v1` profile：先通过 v2 专用、纯递归的
+`canonicalize_v2()` 将已验证 DTO 转成只含 JSON object/array/string/integer/boolean/null 的 payload；root 必须是 object，mapping key
+必须是 string，tuple/sequence 转为 array，datetime 必须在进入 serializer 前按字段契约规范为 UTC，Decimal
+必须先转为本 ADR 定义的 `decimal-value-v1` object，禁止裸 float 与非有限数。该规则递归覆盖 evidence 中的
+**每一个** Decimal，包括 FixtureRunSpec initial cash/cost bps、TargetPosition、ReferenceResult 的 price/quantity/
+cash/equity/trade cost，以及 MetricInput/MetricSet；不能只处理指标字段，也不能直接沿用项目 generic
+`canonicalize()` 当前的 Decimal `format(value, "f")` 行为。随后调用等价于
+`json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)`，结果以严格
+UTF-8 编码且不加 BOM、尾换行或额外 whitespace。string 使用 Python JSON 的确定 escape 规则；禁止未配对
+surrogate，Unicode 不做隐式 NFC/NFKC normalization。
+
+loader 对 duplicate-key-free JSON 完整验证、重建 DTO 后，必须以同一 profile 重新序列化并要求与原始 bytes
+逐字相等，再计算 SHA-256；语义相同但 key order、whitespace、escape、Unicode normalization、integer spelling
+或尾随字节不同均是 noncanonical。CORE-06A/B 必须为 MetricInputV2、MetricSetV2、evidence 和 manifest 各固定
+至少一个完整 canonical bytes/SHA-256 golden，并在 Python 3.11/3.12/3.13 上逐字一致。
 
 ### 6. Manifest v2 与 v1 dispatcher
 
@@ -269,6 +292,9 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
 16. implementation registry 的固定 uint64 wire-format golden 必须跨 Python 版本一致；修改任一声明 helper/resource
     都改变 code hash，未声明项目内 import/resource、动态 import、缺失 source 或仅 `.pyc` 的环境不得生成或重放
     verified evidence。
+17. v2 canonical JSON golden 在 Python 3.11/3.12/3.13 逐 byte/hash 一致；key order、whitespace、Unicode escape/
+    normalization、非法 surrogate、integer representation 或尾随字节变化均拒绝。CAGR elapsed-days golden 必须
+    证明只使用 `last_session - first_session` 的日历日差。
 
 ## Deferred / Non-goals
 
