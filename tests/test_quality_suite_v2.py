@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -30,6 +30,7 @@ from quantverify.data.quality import (
     RevisionPair,
     evidence_ref_from_verified_capture,
 )
+from quantverify.data.quality.identity import canonical_decimal, normalized_bars_hash
 from quantverify.data.store import CaptureStore, DataLicenseProfile, VerifiedCapture
 
 ASSET = AssetId(
@@ -306,6 +307,41 @@ def test_equivalent_decimal_scales_have_one_scientific_identity() -> None:
     assert first_policy.content_hash == second_policy.content_hash
     assert first.context.normalized_input_refs == second.context.normalized_input_refs
     assert first.report_id == second.report_id
+
+
+def test_scientific_decimal_identity_is_exact_and_context_independent() -> None:
+    first_value = Decimal("12345678901234567890123456781")
+    second_value = Decimal("12345678901234567890123456782")
+    first_bar = bar("2026-01-02", close=str(first_value))
+    second_bar = bar("2026-01-02", close=str(second_value))
+
+    identities: list[tuple[str, str, str, str]] = []
+    for precision in (10, 28, 50):
+        with localcontext() as context:
+            context.prec = precision
+            identities.append(
+                (
+                    canonical_decimal(first_value),
+                    canonical_decimal(second_value),
+                    normalized_bars_hash((first_bar,)),
+                    normalized_bars_hash((second_bar,)),
+                )
+            )
+
+    assert len(set(identities)) == 1
+    first_identity, second_identity, first_hash, second_hash = identities[0]
+    assert first_identity == str(first_value)
+    assert second_identity == str(second_value)
+    assert first_identity != second_identity
+    assert first_hash != second_hash
+
+
+def test_scientific_decimal_identity_normalizes_scale_zero_and_extreme_exponents() -> None:
+    assert canonical_decimal(Decimal("1.2300")) == "1.23"
+    assert canonical_decimal(Decimal("-0")) == canonical_decimal(Decimal("0.000")) == "0"
+    assert canonical_decimal(Decimal("1E+10000")) == "1E+10000"
+    assert canonical_decimal(Decimal("1.00E+10000")) == "1E+10000"
+    assert canonical_decimal(Decimal("1E-10000")) == "1E-10000"
 
 
 def test_normalizer_version_changes_report_identity() -> None:

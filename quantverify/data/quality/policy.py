@@ -9,7 +9,7 @@ from typing import Annotated
 from pydantic import Field, model_validator
 
 from quantverify.core.models import DomainModel
-from quantverify.data.quality.identity import full_content_hash
+from quantverify.data.quality.identity import canonical_decimal, full_content_hash
 
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
 
@@ -57,8 +57,5 @@ class QualityPolicy(DomainModel):
         payload = validated.model_dump(mode="python")
         for field in ("price_pass_tolerance_bps", "price_warning_tolerance_bps"):
             value = getattr(validated, field)
-            payload[field] = format(
-                Decimal(0) if value == 0 else value.normalize(),
-                "f",
-            )
+            payload[field] = canonical_decimal(value)
         return full_content_hash(payload)
