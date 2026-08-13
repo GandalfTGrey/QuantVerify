@@ -49,7 +49,7 @@ Contributor-Role: <S-5.6|Argus|Q-Lead|CA-Lead|Dev-Lead|QA-Lead>
 | CORE-03 | 已完成：DatasetRelease reference contract（PR #59、ADR-0011） | RAW/daily/single-source `DatasetReleaseRef` 绑定 normalizer、quality policy/report、eligible intervals、calendar/schedule 与单资产 experiment identity；A4 authenticity 仍由 verified factory/store 证明 |
 | CORE-04 | 已完成契约层：显式 session schedule | reference strategy 使用显式 schedule 的下一 session open；生产权威性仍由 A4 pinned calendar/release 证明 |
 | CORE-05 | 05A 已完成（PR #61、ADR-0012）；05B 待实现 | command DTO、科学 identity、capability、plan/inspect handler ports 已冻结；registry-backed preflight/run handler 等 CORE-06 与 SW-03 |
-| CORE-06 | 设计已接受（Issue #66、ADR-0013 Accepted）；06A 已完成（PR #69），06B 按 B1 registry → B2 evidence/replay → B3 store/dispatcher 实施，B1 active | B1 独占 implementation registry/code closure；B2 独占内存 evidence/full replay；B3 独占 artifact v2 hardened publication/dispatcher。顺序合并且不破坏 v1 verified read |
+| CORE-06 | 设计已接受（Issue #66、ADR-0013 Accepted）；06A 已完成（PR #69），06B1 registry 已完成（PR #71）；B2 先冻结 legacy binary64 spec projection amendment，再实现 evidence/replay | B1 独占 implementation registry/code closure；B2 独占 typed spec projection、内存 evidence/full replay；B3 独占 artifact v2 runtime binding、hardened publication/dispatcher。顺序合并且不破坏 legacy identity 或 v1 verified read |
 
 `quantverify/core/models.py`、`quantverify/core/ports.py`、配置 schema、实验身份和 ADR 编号属于共享热点。除 S-5.6 的 contract PR 外，其他 PR 若必须修改这些文件，需先在 Issue 中列出理由、影响和兼容方案并获得批准。
 

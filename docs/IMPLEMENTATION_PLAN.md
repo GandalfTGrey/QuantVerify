@@ -41,7 +41,7 @@
 | Fixture strategy pack | Done | S4/S2/S3/S1 与 S5 signal-only 已合并（PR #39/#41/#43/#45/#49）；S5 不宣称多资产执行 |
 | Experiment service/CLI | Blocked / Design | Issue #17；CORE-05A、SW-03 与 CORE-06A 已完成，fixture-only run 仍等待 CORE-06B（B1→B2→B3）与 CORE-05B |
 | 真实市场数据准入 | Blocked | AkShare 美股历史缺口；Tushare 无美股权限；尚无 Gold dataset |
-| S-5.6 integration train | In progress | #64、SW-03、CORE-06A 与 #68 execution numerics 已合并；当前按 CORE-06B1 registry → B2 evidence/replay → B3 store/dispatcher → CORE-05B 实施 |
+| S-5.6 integration train | In progress | #64、SW-03、CORE-06A、#68 execution numerics 与 CORE-06B1 registry 已合并；当前先冻结 B2 legacy binary64 spec projection，再按 B2 evidence/replay → B3 store/dispatcher → CORE-05B 实施 |
 
 ## 3. Milestone 0 — Foundation
 
@@ -244,7 +244,7 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 6. `#29 A4 verified DatasetRelease factory/store + authoritative calendar resolver`；
 7. 真实数据 application preflight（另依赖 A4；adjusted/total-return 还依赖 CA-01）。
 
-已完成的并行基础：DATA-01/A3、CORE-03、CORE-05A、#22 causal week/month bars、#23 Metrics v1、#24 verified artifact inspection、#30 五策略 fixture reference pack、#26 SW02、#64 exact Decimal identity、#27 SW-03 FixtureBundle、CORE-06A Metrics v2 与 #68 execution numerics。ADR-0013 已接受；当前关键路径为 CORE-06B1 implementation registry、B2 evidence/full replay、B3 hardened artifact v2/dispatcher、CORE-05B handler，再到 #17 CLI。数据线可并行推进 #29 A4 design、#5 QQQ/DIA 冲突证据与 #25 公司行动 contract/design；#28 是增量独立 QA。完整 Owner、文件边界和 merge train 见 `COLLABORATION_SCOPE.md`；实时 head SHA 与 blocker 以 #14 为准。
+已完成的并行基础：DATA-01/A3、CORE-03、CORE-05A、#22 causal week/month bars、#23 Metrics v1、#24 verified artifact inspection、#30 五策略 fixture reference pack、#26 SW02、#64 exact Decimal identity、#27 SW-03 FixtureBundle、CORE-06A Metrics v2、#68 execution numerics 与 CORE-06B1 implementation registry。ADR-0013 已接受；当前关键路径为 B2 legacy binary64 spec projection amendment、B2 evidence/full replay、B3 hardened artifact v2/dispatcher、CORE-05B handler，再到 #17 CLI。数据线可并行推进 #29 A4 design、#5 QQQ/DIA 冲突证据与 #25 公司行动 contract/design；#28 是增量独立 QA。完整 Owner、文件边界和 merge train 见 `COLLABORATION_SCOPE.md`；实时 head SHA 与 blocker 以 #14 为准。
 
 ## 13. 已确认的产品与工程决策
 
