@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, localcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -30,6 +30,7 @@ from quantverify.data.quality import (
     RevisionPair,
     evidence_ref_from_verified_capture,
 )
+from quantverify.data.quality.identity import canonical_decimal, normalized_bars_hash
 from quantverify.data.store import CaptureStore, DataLicenseProfile, VerifiedCapture
 
 ASSET = AssetId(
@@ -306,6 +307,134 @@ def test_equivalent_decimal_scales_have_one_scientific_identity() -> None:
     assert first_policy.content_hash == second_policy.content_hash
     assert first.context.normalized_input_refs == second.context.normalized_input_refs
     assert first.report_id == second.report_id
+
+
+def test_scientific_decimal_identity_is_exact_and_context_independent() -> None:
+    first_value = Decimal("12345678901234567890123456781")
+    second_value = Decimal("12345678901234567890123456782")
+    first_bar = bar("2026-01-02", close=str(first_value))
+    second_bar = bar("2026-01-02", close=str(second_value))
+
+    identities: list[tuple[str, str, str, str]] = []
+    for precision in (10, 28, 50):
+        with localcontext() as context:
+            context.prec = precision
+            identities.append(
+                (
+                    canonical_decimal(first_value),
+                    canonical_decimal(second_value),
+                    normalized_bars_hash((first_bar,)),
+                    normalized_bars_hash((second_bar,)),
+                )
+            )
+
+    assert len(set(identities)) == 1
+    first_identity, second_identity, first_hash, second_hash = identities[0]
+    assert first_identity == str(first_value)
+    assert second_identity == str(second_value)
+    assert first_identity != second_identity
+    assert first_hash != second_hash
+
+
+def test_scientific_decimal_identity_normalizes_scale_zero_and_extreme_exponents() -> None:
+    assert canonical_decimal(Decimal("1.2300")) == "1.23"
+    assert canonical_decimal(Decimal("-0")) == canonical_decimal(Decimal("0.000")) == "0"
+    assert canonical_decimal(Decimal("1E+10000")) == "1E+10000"
+    assert canonical_decimal(Decimal("1.00E+10000")) == "1E+10000"
+    assert canonical_decimal(Decimal("1E-10000")) == "1E-10000"
+
+
+def test_cross_source_evidence_uses_one_fixed_decimal_context() -> None:
+    session = date(2026, 1, 2)
+    sources = [
+        source("source_a", "a", "b", [bar(session.isoformat())]),
+        source(
+            "source_b",
+            "d",
+            "e",
+            [bar(session.isoformat(), close="100.105")],
+        ),
+    ]
+
+    reports = []
+    for precision, rounding in ((2, ROUND_DOWN), (10, ROUND_UP), (50, ROUND_DOWN)):
+        with localcontext() as context:
+            context.prec = precision
+            context.rounding = rounding
+            reports.append(
+                evaluate(
+                    sources,
+                    [session],
+                    start=session,
+                    end=session,
+                )
+            )
+
+    assert all(report == reports[0] for report in reports[1:])
+    assert all(report.report_id == reports[0].report_id for report in reports[1:])
+    cross_source = next(
+        result for result in reports[0].check_results if result.check_id == "cross_source_ohlc"
+    )
+    assert cross_source.status is CheckStatus.WARNING
+    assert cross_source.metrics["max_difference_bps"] == (
+        "10.49449039254391444491641888008795"
+    )
+
+
+@pytest.mark.parametrize(
+    ("right", "expected_status"),
+    [
+        ("2000.9999999999999999999999999999999999999999", CheckStatus.PASS),
+        ("2001", CheckStatus.PASS),
+        ("2001.0000000000000000000000000000000000000001", CheckStatus.WARNING),
+        ("2005.01", CheckStatus.WARNING),
+        ("2010.04", CheckStatus.FAIL),
+    ],
+)
+def test_cross_source_thresholds_use_exact_rational_comparison(
+    right: str,
+    expected_status: CheckStatus,
+) -> None:
+    session = date(2026, 1, 2)
+    left = bar(session.isoformat(), close="1999")
+    right_bar = bar(session.isoformat(), close=right)
+    report = evaluate(
+        [source("source_a", "a", "b", [left]), source("source_b", "d", "e", [right_bar])],
+        [session],
+        start=session,
+        end=session,
+    )
+    cross_source = next(
+        result for result in report.check_results if result.check_id == "cross_source_ohlc"
+    )
+    assert cross_source.status is expected_status
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        Decimal("1E+1001"),
+        Decimal("1E-1001"),
+        Decimal("1." + "1" * 64),
+    ],
+)
+def test_quality_decimal_domain_rejects_unbounded_values_without_overflow(
+    value: Decimal,
+) -> None:
+    session = date(2026, 1, 2)
+    extreme = bar(session.isoformat()).model_copy(
+        update={"open": value, "high": value, "low": value, "close": value}
+    )
+    with pytest.raises(
+        DataQualityError,
+        match="quality source rows cannot be deterministically identified",
+    ):
+        evaluate(
+            [source("source_a", "a", "b", [extreme])],
+            [session],
+            start=session,
+            end=session,
+        )
 
 
 def test_normalizer_version_changes_report_identity() -> None:

@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import (
+    MAX_EMAX,
+    MIN_EMIN,
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    InvalidOperation,
+    localcontext,
+)
+from fractions import Fraction
 from itertools import combinations, pairwise
 from typing import Any
 
@@ -37,6 +46,14 @@ from quantverify.data.quality.provenance import evidence_ref_from_verified_captu
 
 _CHECK_VERSION = "2"
 _PRICE_FIELDS = ("open", "high", "low", "close")
+_QUALITY_DECIMAL_CONTEXT = Context(
+    prec=34,
+    rounding=ROUND_HALF_EVEN,
+    Emin=MIN_EMIN,
+    Emax=MAX_EMAX,
+    capitals=1,
+    clamp=0,
+)
 
 
 class QualitySuite:
@@ -805,9 +822,17 @@ class QualitySuite:
                         continue
                     compared += 1
                     maximum = max(maximum, difference)
-                    if difference <= policy.price_pass_tolerance_bps:
+                    if self._difference_at_most(
+                        left_value,
+                        right_value,
+                        policy.price_pass_tolerance_bps,
+                    ):
                         continue
-                    if difference <= policy.price_warning_tolerance_bps:
+                    if self._difference_at_most(
+                        left_value,
+                        right_value,
+                        policy.price_warning_tolerance_bps,
+                    ):
                         severity = FindingSeverity.WARNING
                         code = "cross_source_field_warning"
                     else:
@@ -1033,10 +1058,27 @@ class QualitySuite:
 
     @staticmethod
     def _symmetric_difference_bps(left: Decimal, right: Decimal) -> Decimal | None:
-        denominator = (abs(left) + abs(right)) / Decimal("2")
+        with localcontext(_QUALITY_DECIMAL_CONTEXT):
+            denominator = (abs(left) + abs(right)) / Decimal("2")
+            if denominator == 0:
+                return None
+            return abs(left - right) / denominator * Decimal("10000")
+
+    @staticmethod
+    def _difference_at_most(
+        left: Decimal,
+        right: Decimal,
+        tolerance_bps: Decimal,
+    ) -> bool:
+        """Compare the symmetric bps ratio exactly, without rounded thresholds."""
+
+        left_fraction = Fraction(left)
+        right_fraction = Fraction(right)
+        denominator = abs(left_fraction) + abs(right_fraction)
         if denominator == 0:
-            return None
-        return abs(left - right) / denominator * Decimal("10000")
+            return True
+        numerator = abs(left_fraction - right_fraction) * 20_000
+        return numerator <= Fraction(tolerance_bps) * denominator
 
     @staticmethod
     def _stable_bar_map(bars: Sequence[NormalizedBar]) -> dict[date, NormalizedBar]:
