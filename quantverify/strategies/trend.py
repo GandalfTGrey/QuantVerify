@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from quantverify.core.enums import SessionLabelPolicy
 from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import SessionSchedule, TargetPosition
+from quantverify.core.numerics import fixture_execution_decimal
 from quantverify.data.models import NormalizedBar
 from quantverify.features.moving_average import simple_moving_average
 
@@ -51,7 +52,15 @@ def price_above_sma_targets(
     if any(bar.asset != asset for bar in bars):
         raise DataQualityError("Strategy input must contain one identical asset")
 
-    averages = simple_moving_average(tuple(bar.close for bar in bars), window=window)
+    numerical_failure = False
+    try:
+        with fixture_execution_decimal():
+            averages = simple_moving_average(tuple(bar.close for bar in bars), window=window)
+    except ArithmeticError:
+        numerical_failure = True
+        averages = ()
+    if numerical_failure:
+        raise DataQualityError("SMA strategy numerical execution failed") from None
     targets: list[TargetPosition] = []
     for index, average in enumerate(averages[:-1]):
         if average is None:

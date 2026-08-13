@@ -1,3 +1,4 @@
+import decimal
 from decimal import Decimal
 from unittest import TestCase
 
@@ -5,7 +6,12 @@ from quantverify.core.exceptions import DataQualityError
 from quantverify.engines.reference import LongFlatReferenceEngine, TradeSide
 from quantverify.metrics import maximum_drawdown, total_return
 from quantverify.strategies import price_above_sma_targets
-from tests.test_trend_strategy import load_bars, load_schedule
+from tests.test_trend_strategy import (
+    decimal_context_state,
+    load_bars,
+    load_schedule,
+    replace_bar,
+)
 
 
 class ReferenceEngineGoldenTests(TestCase):
@@ -66,3 +72,66 @@ class ReferenceEngineGoldenTests(TestCase):
                 self.assertRaisesRegex(DataQualityError, "strictly ordered by session"),
             ):
                 self.engine.run(bars, (), initial_cash=Decimal("10300"))
+
+    def test_complete_result_is_independent_of_host_decimal_context(self) -> None:
+        expected = self.engine.run(
+            self.bars,
+            self.targets,
+            initial_cash=Decimal("10300"),
+            commission_bps=Decimal("10"),
+            slippage_bps=Decimal("5"),
+        )
+        original = decimal.getcontext().copy()
+        try:
+            for precision in (5, 10, 28, 50):
+                for rounding in (
+                    decimal.ROUND_UP,
+                    decimal.ROUND_DOWN,
+                    decimal.ROUND_HALF_EVEN,
+                ):
+                    with self.subTest(precision=precision, rounding=rounding):
+                        host = decimal.getcontext()
+                        host.prec = precision
+                        host.rounding = rounding
+                        host.traps[decimal.Inexact] = True
+                        host.flags[decimal.Rounded] = True
+                        before = decimal_context_state(host)
+                        actual = self.engine.run(
+                            self.bars,
+                            self.targets,
+                            initial_cash=Decimal("10300"),
+                            commission_bps=Decimal("10"),
+                            slippage_bps=Decimal("5"),
+                        )
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(decimal_context_state(decimal.getcontext()), before)
+        finally:
+            decimal.setcontext(original)
+
+    def test_failure_restores_host_decimal_context(self) -> None:
+        original = decimal.getcontext().copy()
+        try:
+            host = decimal.getcontext()
+            host.prec = 5
+            host.rounding = decimal.ROUND_DOWN
+            host.flags[decimal.Inexact] = True
+            before = decimal_context_state(host)
+            extreme = list(self.bars)
+            extreme[3] = replace_bar(
+                extreme[3],
+                high=Decimal("9E+999999"),
+                close=Decimal("9E+999999"),
+            )
+            with self.assertRaisesRegex(
+                DataQualityError, "numerical execution failed"
+            ) as captured:
+                self.engine.run(
+                    tuple(extreme),
+                    self.targets,
+                    initial_cash=Decimal("9E+999999"),
+                )
+            self.assertIsNone(captured.exception.__cause__)
+            self.assertIsNone(captured.exception.__context__)
+            self.assertEqual(decimal_context_state(decimal.getcontext()), before)
+        finally:
+            decimal.setcontext(original)
