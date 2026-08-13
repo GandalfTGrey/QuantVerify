@@ -166,10 +166,11 @@ targets 的独立 identity 固定为 `fixture-target-positions-v1`：preimage �
 有序顺序；`targets_content_hash` 是该 bytes 的完整 SHA-256。禁止对裸 tuple、排序后的 targets 或 generic
 项目 identity helper 取 hash。
 
-CORE-06B2 不包含 observation manifest/runtime，因此它只能返回完整、确定性地 replayed evidence，不能单独
-授予 trusted run artifact authority，也不能独立证明 `run_id == fixture_run_spec.run_id(runtime)`。CORE-06B3
-必须从 manifest 的 fresh runtime 重算该等式并完成 manifest/evidence/run 三方绑定后，才能把 store-backed
-读取结果标记为 verified artifact。
+CORE-06B2 的 builder/replay API 必须接收一个 freshly revalidated `RuntimeContext` 作为显式外部输入，以重算
+并证明 `evidence.run_id == fixture_run_spec.run_id(runtime)`；runtime 本身不进入确定性 evidence bytes，B2 也不
+接收 observation manifest 或授予 trusted run artifact authority。CORE-06B3 必须证明
+`RunArtifactManifestV2.runtime` 正是用于该次 B2 重算的 runtime，并完成 manifest/evidence/run 三方绑定后，
+才能把 store-backed 读取结果标记为 verified artifact。
 
 `StrategyImplementationRefV1` 和 `EngineImplementationRefV1` 都包含 strict id、version、code hash，并
 由显式静态 registry exact resolve。strategy ref 必须逐字段匹配 `ExperimentConfig.strategy`；engine ref
@@ -206,19 +207,24 @@ points、trades 的 asset/session/timestamps 一致；result 的 initial cash/co
 逐项等于 result points；全部派生 id/hash 可重算。任一 row 的缺失、增加、重排或修改都改变 artifact
 identity 或被拒绝。
 
-CORE-06B verifier 必须从 freshly revalidated evidence 内嵌 FixtureRunSpec 与 manifest RuntimeContext 重算
-`expected_run_id = fixture_run_spec.run_id(manifest.runtime)`，并要求
-`manifest.run_id == evidence.run_id == expected_run_id`。manifest/evidence 的 experiment id 与 fixture-run-spec id
-也必须分别等于该内嵌 spec 的新鲜派生值；在 registry resolve 或任何 strategy/engine replay 前完成这些检查。
-修改 nested runtime 后重算 manifest/evidence hashes、path 并在两边重复任意 run id，仍不得绕过此门禁。
-RuntimeContext 的 source commit/environment lock 是 run identity 输入，但不能代替 implementation registry 的
-exact code-hash closure 验证。
+CORE-06B2 必须先从 freshly revalidated evidence projection 无损重建 legacy `FixtureRunSpec`，再以 fresh
+experiment/spec identities 与调用方显式提供、freshly revalidated 的 `RuntimeContext` 重算 evidence run id，
+并完成纯内存 deterministic replay；它不接收 observation manifest，也不授予 trusted artifact authority。
+CORE-06B3 必须从 `RunArtifactManifestV2.runtime` 与 B2 重建的 spec 重算
+`expected_run_id = fixture_run_spec.run_id(run_artifact_manifest.runtime)`，并要求
+`run_artifact_manifest.run_id == evidence.run_id == expected_run_id`。`RunArtifactManifestV2` 与 evidence 的
+experiment id、fixture-run-spec id 也必须分别等于该重建 spec 的新鲜派生值；B3 必须在 registry resolve 或调用
+B2 strategy/engine replay 前完成这些检查。修改 nested runtime 后重算 manifest/evidence hashes、path 并在两边
+重复任意 run id，仍不得绕过此门禁。这里的 observation manifest 是 `RunArtifactManifestV2`，不得与 evidence
+内嵌的 SW-03 `FixtureManifest` 混淆。RuntimeContext 的 source commit/environment lock 是 run identity 输入，
+但不能代替 implementation registry 的 exact code-hash closure 验证。
 
-verified replay 不只检查自洽性：它必须从静态 registry 解析 strategy/engine implementation，在完整
-manifest bars 与 schedule 上重新运行 strategy，逐项比较 ordered targets（含 decision watermark、next
+B2 deterministic replay 不只检查自洽性：它必须从静态 registry 解析 strategy/engine implementation，在完整
+`FixtureManifest` bars 与 schedule 上重新运行 strategy，逐项比较 ordered targets（含 decision watermark、next
 open effective time、asset/weight）；再用 bars、targets、initial cash、commission/slippage 重跑 reference
 engine并逐字段比较完整 points/trades/result；随后由 MetricInputV2 factory 和 calculator 重算 metrics。
-任一步不相等都拒绝。自洽但非由注册实现生成的 targets/result/metrics 不是 verified evidence。
+任一步不相等都拒绝。自洽但非由注册实现生成的 targets/result/metrics 不是 replayed evidence；只有 B3 完成
+上述 runtime/manifest 三方绑定与 store-backed read 后才能返回 verified artifact。
 
 artifact content 不包含 `created_at`、store root、hostname 或绝对路径。v2 仍只适用于小型 fixture
 JSON，不替代未来真实数据的 Parquet/DuckDB artifact 设计。
@@ -362,7 +368,8 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
     experiment/spec ID golden 保持不变。
 19. targets hash 只接受 `fixture-target-positions-v1` 固定 object preimage；删增、重排或修改任一完整 target
     都改变 hash，自洽重哈希但不能通过 registered strategy replay。B2 replayed evidence 不得冒充已完成 runtime/
-    manifest 三方绑定的 verified run artifact。
+    manifest 三方绑定的 verified run artifact；B2 必须从显式 runtime 重算 evidence run id，但不得把 runtime
+    本身加入 deterministic evidence content。
 
 ## Deferred / Non-goals
 
