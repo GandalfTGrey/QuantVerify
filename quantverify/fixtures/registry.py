@@ -33,29 +33,30 @@ class FixtureNotFoundError(FixtureError):
 def load_fixture_manifest(document: str | bytes) -> LoadedFixture:
     """Load one manifest document without resolving paths or contacting providers."""
 
-    if isinstance(document, str):
-        encoded = document.encode("utf-8")
-    elif isinstance(document, bytes):
-        encoded = document
-    else:
+    if type(document) not in (str, bytes):
         raise FixtureIntegrityError("fixture manifest must be UTF-8 JSON bytes or text")
-    if not encoded or len(encoded) > MAX_MANIFEST_BYTES:
-        raise FixtureIntegrityError("fixture manifest size is invalid")
+    failed = False
     try:
+        encoded = document.encode("utf-8") if isinstance(document, str) else document
+        if not encoded or len(encoded) > MAX_MANIFEST_BYTES:
+            raise FixtureIntegrityError("fixture manifest size is invalid")
         raw = json.loads(encoded.decode("utf-8"), object_pairs_hook=_unique_object)
         manifest = FixtureManifest.model_validate(raw)
         loaded = LoadedFixture(manifest=manifest)
         return LoadedFixture.model_validate(loaded.model_dump(mode="python"))
-    except FixtureIntegrityError:
-        raise
     except (
+        FixtureIntegrityError,
+        UnicodeEncodeError,
         UnicodeDecodeError,
         json.JSONDecodeError,
         ValidationError,
         TypeError,
         ValueError,
-    ) as exc:
-        raise FixtureIntegrityError("fixture manifest failed integrity validation") from exc
+    ):
+        failed = True
+    if failed:
+        raise FixtureIntegrityError("fixture manifest failed integrity validation") from None
+    raise AssertionError("fixture manifest loader reached an impossible state")
 
 
 class FixtureRegistry:
@@ -98,16 +99,20 @@ class FixtureRegistry:
             stored = self._fixtures[fixture_id]
         except KeyError:
             raise FixtureNotFoundError("fixture identifier is not registered") from None
+        failed = False
         try:
             return LoadedFixture.model_validate(stored.model_dump(mode="python"))
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise FixtureIntegrityError("registered fixture failed integrity validation") from exc
+        except (AttributeError, TypeError, ValueError):
+            failed = True
+        if failed:
+            raise FixtureIntegrityError("registered fixture failed integrity validation") from None
+        raise AssertionError("fixture registry resolver reached an impossible state")
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise FixtureIntegrityError(f"duplicate fixture manifest key: {key!r}")
+            raise FixtureIntegrityError("fixture manifest contains a duplicate key")
         result[key] = value
     return result
