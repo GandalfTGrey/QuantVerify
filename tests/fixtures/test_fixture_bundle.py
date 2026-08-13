@@ -152,6 +152,23 @@ def test_untrusted_manifest_failures_do_not_expose_raw_input(
     assert error.__context__ is None
 
 
+def test_deeply_nested_manifest_returns_the_fixed_public_error() -> None:
+    depth = 5_000
+    document = f'{"[" * depth}"SUPERSECRET"{"]" * depth}'
+    assert len(document.encode("utf-8")) < 2 * 1024 * 1024
+
+    with pytest.raises(
+        FixtureIntegrityError,
+        match=r"^fixture manifest failed integrity validation$",
+    ) as captured:
+        load_fixture_manifest(document)
+
+    error = captured.value
+    assert "SUPERSECRET" not in str(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
 @pytest.mark.parametrize("field", ["bundle_content_hash", "manifest_content_hash"])
 def test_manifest_and_bundle_hash_mismatches_fail_closed(field: str) -> None:
     values = manifest_values()
