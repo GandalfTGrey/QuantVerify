@@ -13,6 +13,7 @@ from pydantic import Field
 
 from quantverify.core.exceptions import DataQualityError
 from quantverify.core.models import AssetId, DomainModel, TargetPosition
+from quantverify.core.numerics import fixture_execution_decimal
 from quantverify.data.models import NormalizedBar
 
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
@@ -70,6 +71,32 @@ class LongFlatReferenceEngine:
         initial_cash: Decimal,
         commission_bps: Decimal = Decimal("0"),
         slippage_bps: Decimal = Decimal("0"),
+    ) -> ReferenceResult:
+        numerical_failure = False
+        result: ReferenceResult | None = None
+        try:
+            with fixture_execution_decimal():
+                result = self._run(
+                    bars,
+                    targets,
+                    initial_cash=initial_cash,
+                    commission_bps=commission_bps,
+                    slippage_bps=slippage_bps,
+                )
+        except ArithmeticError:
+            numerical_failure = True
+        if numerical_failure or result is None:
+            raise DataQualityError("Reference engine numerical execution failed") from None
+        return result
+
+    def _run(
+        self,
+        bars: Sequence[NormalizedBar],
+        targets: Sequence[TargetPosition],
+        *,
+        initial_cash: Decimal,
+        commission_bps: Decimal,
+        slippage_bps: Decimal,
     ) -> ReferenceResult:
         if not bars:
             raise DataQualityError("Reference engine requires at least one bar")

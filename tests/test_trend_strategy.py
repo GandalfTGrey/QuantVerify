@@ -1,4 +1,5 @@
 import csv
+import decimal
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +17,19 @@ from quantverify.strategies.trend import price_above_sma_targets
 FIXTURES = Path(__file__).parent / "fixtures"
 ASSET = AssetId(symbol="QQQ", venue="XNAS", asset_class=AssetClass.ETF, currency="USD")
 DIA = AssetId(symbol="DIA", venue="ARCX", asset_class=AssetClass.ETF, currency="USD")
+
+
+def decimal_context_state(context: decimal.Context) -> tuple[object, ...]:
+    return (
+        context.prec,
+        context.rounding,
+        context.Emin,
+        context.Emax,
+        context.capitals,
+        context.clamp,
+        tuple(context.flags.items()),
+        tuple(context.traps.items()),
+    )
 
 
 def load_bars() -> tuple[NormalizedBar, ...]:
@@ -76,7 +90,6 @@ class MovingAverageTests(TestCase):
         with self.assertRaisesRegex(ValueError, "window must be positive"):
             simple_moving_average((Decimal("1"),), window=0)
 
-
 class TrendGoldenTests(TestCase):
     def test_calendar_fixture_has_pinned_schedule_identity(self) -> None:
         self.assertEqual(
@@ -99,6 +112,74 @@ class TrendGoldenTests(TestCase):
             self.assertEqual(target.decision_at.isoformat(), expected_target["decision_at"])
             self.assertEqual(target.effective_at.isoformat(), expected_target["effective_at"])
             self.assertEqual(target.weight, Decimal(expected_target["weight"]))
+
+    def test_complete_targets_are_independent_of_host_decimal_context(self) -> None:
+        source = load_bars()[:4]
+        values = (Decimal("1"), Decimal("1"), Decimal("1.0000000001"))
+        bars = (
+            *(
+                replace_bar(bar, open=value, high=value, low=value, close=value)
+                for bar, value in zip(source[:3], values, strict=True)
+            ),
+            source[3],
+        )
+        schedule = load_schedule(session_count=4)
+        expected = price_above_sma_targets(bars, window=3, schedule=schedule)
+        self.assertEqual(len(expected), 1)
+        self.assertEqual(expected[0].weight, Decimal("1"))
+        original = decimal.getcontext().copy()
+        try:
+            for precision in (5, 10, 28, 50):
+                for rounding in (
+                    decimal.ROUND_UP,
+                    decimal.ROUND_DOWN,
+                    decimal.ROUND_HALF_EVEN,
+                ):
+                    with self.subTest(precision=precision, rounding=rounding):
+                        host = decimal.getcontext()
+                        host.prec = precision
+                        host.rounding = rounding
+                        host.traps[decimal.Inexact] = True
+                        host.flags[decimal.Rounded] = True
+                        before = decimal_context_state(host)
+                        actual = price_above_sma_targets(
+                            bars,
+                            window=3,
+                            schedule=schedule,
+                        )
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(decimal_context_state(decimal.getcontext()), before)
+        finally:
+            decimal.setcontext(original)
+
+    def test_numerical_failure_is_typed_and_restores_host_context(self) -> None:
+        bars = load_bars()
+        extreme = tuple(
+            replace_bar(
+                bar,
+                open=Decimal("9E+999999"),
+                high=Decimal("9E+999999"),
+                low=Decimal("9E+999999"),
+                close=Decimal("9E+999999"),
+            )
+            for bar in bars
+        )
+        original = decimal.getcontext().copy()
+        try:
+            host = decimal.getcontext()
+            host.prec = 5
+            host.rounding = decimal.ROUND_UP
+            host.flags[decimal.Inexact] = True
+            before = decimal_context_state(host)
+            with self.assertRaisesRegex(
+                DataQualityError, "numerical execution failed"
+            ) as captured:
+                price_above_sma_targets(extreme, window=3, schedule=load_schedule())
+            self.assertIsNone(captured.exception.__cause__)
+            self.assertIsNone(captured.exception.__context__)
+            self.assertEqual(decimal_context_state(decimal.getcontext()), before)
+        finally:
+            decimal.setcontext(original)
 
     def test_truncating_future_does_not_change_past_targets(self) -> None:
         bars = load_bars()

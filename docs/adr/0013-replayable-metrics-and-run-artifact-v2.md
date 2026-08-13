@@ -165,10 +165,26 @@ import hook、动态 import 或运行时代码生成均 fail closed。第三方�
 source/resource；source 缺失、只剩 `.pyc` 或 installed bytes/hash 不匹配均 fail closed。运行时只验证这些 installed
 bytes 与 pinned hash，不扫描新 module，也不允许调用方填写新 code hash。
 
+fixture v1 的 strategy 与 reference engine 数值执行固定使用 `fixture-execution-decimal-v1`：precision 28、
+ROUND_HALF_EVEN、Emin -999999、Emax 999999、capitals 1、clamp 0；InvalidOperation、DivisionByZero、Overflow
+traps 开启，FloatOperation、Underflow、Subnormal、Inexact、Rounded、Clamped traps 关闭，且每次顶层执行从
+全新 context 清空 flags。不得复制或读取宿主 Decimal context；成功或异常退出后宿主 precision、rounding、
+limits、traps 和 flags 必须逐项不变。实现该环境的项目内 helper 必须同时进入 strategy 与 engine registry 的
+完整静态传递 code-hash closure；任何数值环境改变都是 implementation identity/golden 迁移，不能在同一
+implementation ref 下静默发生。Metrics v2 calculator 继续使用它自己独立的 decimal-context-v1，不复用本环境。
+
 Validator 必须证明：spec 与 manifest 的 fixture/dataset/content/schedule identities 一致；bars、targets、
 points、trades 的 asset/session/timestamps 一致；result 的 initial cash/costs 与 spec 一致；metrics equity
 逐项等于 result points；全部派生 id/hash 可重算。任一 row 的缺失、增加、重排或修改都改变 artifact
 identity 或被拒绝。
+
+CORE-06B verifier 必须从 freshly revalidated evidence 内嵌 FixtureRunSpec 与 manifest RuntimeContext 重算
+`expected_run_id = fixture_run_spec.run_id(manifest.runtime)`，并要求
+`manifest.run_id == evidence.run_id == expected_run_id`。manifest/evidence 的 experiment id 与 fixture-run-spec id
+也必须分别等于该内嵌 spec 的新鲜派生值；在 registry resolve 或任何 strategy/engine replay 前完成这些检查。
+修改 nested runtime 后重算 manifest/evidence hashes、path 并在两边重复任意 run id，仍不得绕过此门禁。
+RuntimeContext 的 source commit/environment lock 是 run identity 输入，但不能代替 implementation registry 的
+exact code-hash closure 验证。
 
 verified replay 不只检查自洽性：它必须从静态 registry 解析 strategy/engine implementation，在完整
 manifest bars 与 schedule 上重新运行 strategy，逐项比较 ordered targets（含 decision watermark、next
