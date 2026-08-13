@@ -47,8 +47,16 @@ calculator 与 identity namespace。
 `0/1`。Factory 从 equity 推导 rational returns；validator、content identity 和 persistence boundary
 再次重导并逐项比较。调用者填写的 detached rational values 不是权威。
 
+`EquityObservationV2` 的数值是 finite Decimal：第一项与所有非末项必须严格大于零；只有最后一项
+可以等于零。零是破产吸收态，之后不得出现 observation 或 return。分子、分母、ddof 和全部 count
+使用 `StrictInt`，明确拒绝 bool/float/string coercion。每个 Decimal 最多 64 位 coefficient、非零值
+adjusted exponent 绝对值不超过 1000；每个 rational numerator/denominator 最多 4096 bits；fixture v2
+最多 10000 个 equity/return/target/point/trade rows，单个 canonical evidence JSON 最大 32 MiB。超限在
+hash、calculator 或 persistence 前使用固定 typed error fail closed。
+
 输入 content identity 覆盖完整有序 equity、完整 rational returns、全部 policy 和 derivation version；
-Decimal 使用不依赖 ambient context 的 sign/coefficient/exponent 语义，等值 scale 与 signed zero 收敛。
+Decimal identity 使用明确 payload：零恒为字符串 `0`；非零为 sign、删除 coefficient 末尾零后的十进制
+digits、同步增加后的 exponent。它不调用 `normalize()`，等值 scale 与 signed zero 收敛。
 
 ### 3. Metric calculator v2 使用固定数值环境
 
@@ -61,17 +69,39 @@ Decimal 使用不依赖 ambient context 的 sign/coefficient/exponent 语义，�
 - 启用的 arithmetic traps；
 - metric-set schema version。
 
+`decimal-context-v1` 是 calculator ref 的组成部分，必须枚举 `prec=34`、
+`rounding=ROUND_HALF_EVEN`、`Emin`、`Emax`、`capitals=1`、`clamp=0`，以及
+`InvalidOperation/FloatOperation/DivisionByZero/Overflow=true`、
+`Underflow/Subnormal/Inexact/Rounded/Clamped=false`。每次计算都从该完整 record 新建 context 并
+`clear_flags()`；不得复制宿主 flags/traps。numeric backend id/version 也进入 calculator ref；v2 baseline
+是 `python-decimal/libmpdec` 与项目声明支持的 backend version range，跨 backend 的一致性必须由 golden
+确认，不能仅凭同 calculator label 假定。
+
 v2 baseline 为 precision 34、`ROUND_HALF_EVEN`，并在每次计算的 `localcontext()` 内显式设置全部
 字段；不得读取或继承宿主的 precision、rounding 或 traps。Total return 和 MaxDD 从 equity 计算；
 CAGR 使用明确 days/year；Volatility 和 Sharpe 将精确 rational returns 在该固定 context 内逐项转换，
 再按声明的 periods/year、ddof 和 risk-free policy 计算。运算顺序属于 calculator version，不能被并行
 求和或第三方库静默替换。
 
+rational 转 Decimal 固定为按 observation 顺序执行 `Decimal(numerator) / Decimal(denominator)`，每项
+只在上述 context 内舍入一次；均值使用从零开始的顺序加和再除 count；variance 使用相同顺序累计
+`(r-mean)**2`；sqrt、CAGR power 与 annual-effective risk-free power 均调用 Python Decimal 对应操作，
+调用顺序和异常映射属于 calculator version。InvalidOperation/DivisionByZero/Overflow 为
+`FAILURE / numeric_error`；样本不足、非正 elapsed time、zero volatility 保持 `UNDEFINED` 的稳定 reason；terminal
+bankruptcy 的 total/CAGR/max-drawdown 为有效 `-1`，其后不得计算复活路径。
+
 `MetricSetV2` 必须绑定 `metric_input_content_hash` 和完整 calculator ref，并保持 VALID、UNDEFINED、
 FAILURE 状态矩阵。其 content identity 覆盖所有结果。Calculator 输出前重验证 input；artifact 接受前
 重新计算并要求完整 `MetricSetV2` 相等。不得把另一个 input 或 calculator 的指标拼接进来。
 
 ### 4. fixture v1 的 opening anchor 是首个 close 的已证明 flat equity
+
+fixture-run v2 第一版只允许**完整消费一个 SW-03 bundle**，不支持任意切片：
+`ConsumedSessionRange.start/end/count/schedule_id/schedule_content_hash` 必须逐字段等于 bundle 完整
+schedule 的 requested bounds、session count、schedule id/content hash；engine bars、result points 和
+metrics equity 必须覆盖其全部 sessions。prefix/suffix omission、相同 schedule hash 的手填 range 或只取
+performance range 均拒绝。未来如需切片，必须先新增绑定 ordered-bar content hash 与派生 schedule hash
+的 `ConsumedFixtureSliceV1`，不能复用本 ADR 的完整消费语义。
 
 CORE-05B 只有在以下条件全部成立时，才能使用 `first_close_flat-v1`：
 
@@ -97,10 +127,23 @@ CORE-05B 只有在以下条件全部成立时，才能使用 `first_close_flat-v
 - engine id/version/code hash 与完整 `ReferenceResult`；
 - `MetricInputV2`、其 content hash、`MetricCalculatorRef`、`MetricSetV2` 和 metric-set content hash。
 
+`StrategyImplementationRefV1` 和 `EngineImplementationRefV1` 都包含 strict id、version、code hash，并
+由显式静态 registry exact resolve。strategy ref 必须逐字段匹配 `ExperimentConfig.strategy`；engine ref
+必须逐字段匹配 experiment engine 和 reference engine capability。`FixtureManifest.manifest_content_hash`、
+`bundle_content_hash`、snapshot content/schema/source、asset/frequency/adjustment、完整 schedule identity、
+spec consumed-session identity、cost bps、initial cash 与 metric policy 都分别进入 evidence identity；不能用
+一句 DTO equality 或 generic ref 替代。
+
 Validator 必须证明：spec 与 manifest 的 fixture/dataset/content/schedule identities 一致；bars、targets、
 points、trades 的 asset/session/timestamps 一致；result 的 initial cash/costs 与 spec 一致；metrics equity
 逐项等于 result points；全部派生 id/hash 可重算。任一 row 的缺失、增加、重排或修改都改变 artifact
 identity 或被拒绝。
+
+verified replay 不只检查自洽性：它必须从静态 registry 解析 strategy/engine implementation，在完整
+manifest bars 与 schedule 上重新运行 strategy，逐项比较 ordered targets（含 decision watermark、next
+open effective time、asset/weight）；再用 bars、targets、initial cash、commission/slippage 重跑 reference
+engine并逐字段比较完整 points/trades/result；随后由 MetricInputV2 factory 和 calculator 重算 metrics。
+任一步不相等都拒绝。自洽但非由注册实现生成的 targets/result/metrics 不是 verified evidence。
 
 artifact content 不包含 `created_at`、store root、hostname 或绝对路径。v2 仍只适用于小型 fixture
 JSON，不替代未来真实数据的 Parquet/DuckDB artifact 设计。
@@ -115,6 +158,12 @@ implicit latest、URL decode 或把 v1 当 v2 升级。
 v1 loader、v1 bytes、v1 canonical path 和 `VerifiedRunArtifact` 保持兼容。v2 使用单独的 verified DTO，
 不得用 generic `ArtifactRef` 或可自洽 Pydantic DTO 代替 store-backed replay。
 
+新 dispatcher 只接受与版本对应的 canonical relative path grammar。它先以 duplicate-key rejecting JSON
+读取一个只含 `manifest_version` 的受限 envelope，再由版本 loader 对完整原 bytes 做 canonical parse 和
+path/hash/schema 验证；envelope 不能改写或重新序列化后再交给 loader。v1 可调用既有
+`inspect_reference_result()`，但其 trust scope 仍是 artifact-v1 integrity-only，且不宣称具备 v2 hostile-FS
+hardening；v2 使用 hardened regular-file/no-follow reader。URL decode、version fallback 和未知字段均拒绝。
+
 ### 7. 发布必须复用 hardened immutable publisher
 
 在实现 v2 store 前，先抽取或复用已经通过 CaptureStore 审计的同目录 staging、fsync、no-overwrite
@@ -126,6 +175,15 @@ engine -> MetricInputV2 factory -> MetricSetV2 calculator -> FixtureRunEvidenceV
 任何前置失败必须零写入。内容和 manifest 分别不可变、幂等；同 identity 不同 bytes、FIFO、directory、
 symlink、partial/crash、concurrent reader/writer 均 fail closed。成功返回的 `RunReceipt` 只能引用 verified
 v2 manifest/artifact，不提供 mutable latest。
+
+必须区分三种 identity：`evidence_content_hash` 标识确定性 evidence bytes；`run_id` 标识科学 spec + runtime；
+`manifest_hash` 标识一次带 `created_at` 的 observation manifest。write API 要求调用方提供并重验证一个 UTC
+`created_at`，重试必须复用完全相同的 manifest bytes；同 run/content 允许 append-only 的多个 observation
+manifest，但 receipt 只返回本次显式 path，不提供“最近一次”。同 canonical path 不同 bytes 是 collision。
+二文件发布的保证是：preflight/strategy/engine/metrics/evidence validation 失败时零写；content 成功但 manifest
+link/fsync 失败时可以留下无 manifest 引用、不可被 inspector 发现为 run 的 orphan content，绝不返回
+receipt。只有 verified manifest 才使 content 成为 trusted run artifact；不虚构跨两个文件的 filesystem
+transaction。orphan cleanup 是后续维护工具，不参与科学 identity。
 
 ## Required Black-box Gates
 
@@ -140,7 +198,11 @@ v2 manifest/artifact，不提供 mutable latest。
 9. v1 golden manifest/result 仍逐 byte verified；unknown v2、moved manifest、noncanonical JSON、duplicate key、
    path escape、latest 和 self-consistent detached DTO 均不获得 verified authority；
 10. publication 在 8 路相同/不同内容并发、hostile filesystem nodes、fd/close/fsync/link/cleanup failures 下
-    保持 typed、atomic、no-overwrite，并证明失败前零 trusted files。
+    保持 typed、atomic、no-overwrite；计算/验证失败零写，publication 失败无 verified manifest/receipt，允许
+    明确记录的 orphan content；
+11. full-bundle start/end/count/schedule hash 任一篡改、prefix/suffix omission 均拒绝；
+12. 静态 registry code hash/version 不匹配，以及自洽但未由注册 strategy/engine 重放产生的 evidence 均拒绝；
+13. 10000-row/32MiB/Decimal/rational bit limits 的边界内通过、边界外固定 typed fail closed。
 
 ## Deferred / Non-goals
 
