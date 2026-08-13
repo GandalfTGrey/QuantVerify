@@ -48,8 +48,8 @@ Contributor-Role: <S-5.6|Argus|Q-Lead|CA-Lead|Dev-Lead|QA-Lead>
 | CORE-02 | 已完成：period series envelope | `SeriesDescriptor` / `DerivedPeriodBar` 已绑定 frequency、adjustment、source lineage、constituent schedule、`available_at` 与 completeness；release source bridge 已冻结 |
 | CORE-03 | 已完成：DatasetRelease reference contract（PR #59、ADR-0011） | RAW/daily/single-source `DatasetReleaseRef` 绑定 normalizer、quality policy/report、eligible intervals、calendar/schedule 与单资产 experiment identity；A4 authenticity 仍由 verified factory/store 证明 |
 | CORE-04 | 已完成契约层：显式 session schedule | reference strategy 使用显式 schedule 的下一 session open；生产权威性仍由 A4 pinned calendar/release 证明 |
-| CORE-05 | `core.ports` 与 ReferenceEngine、RunArtifactStore 的真实签名漂移 | 冻结 application command DTO、handler ports 与 composition boundary |
-| CORE-06 | artifact v1 未绑定 normalized input/quality report/metrics | 在不破坏 v1 verified read 的前提下决定 artifact v2 lineage 与 metrics schema |
+| CORE-05 | 05A 已完成（PR #61、ADR-0012）；05B 待实现 | command DTO、科学 identity、capability、plan/inspect handler ports 已冻结；registry-backed preflight/run handler 等 CORE-06 与 SW-03 |
+| CORE-06 | 设计中（Issue #66、ADR-0013 Proposed） | v1 Decimal returns 不能精确表达任意 equity 比率；新增 rational-return MetricInput/MetricSet v2 与 artifact v2，不破坏 v1 verified read |
 
 `quantverify/core/models.py`、`quantverify/core/ports.py`、配置 schema、实验身份和 ADR 编号属于共享热点。除 S-5.6 的 contract PR 外，其他 PR 若必须修改这些文件，需先在 Issue 中列出理由、影响和兼容方案并获得批准。
 

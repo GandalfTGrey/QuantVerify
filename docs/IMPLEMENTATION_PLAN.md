@@ -20,7 +20,7 @@
 | 架构 v0.2 | Done | 补齐 causal/PIT/portfolio/identity/governance |
 | 架构审查 | Done | 严重度、风险和处置已记录 |
 | Python package baseline | Done | `pyproject.toml`、package、gitignore |
-| Core domain contracts | Done / Partial extension | market series、交易日历、因果周期 bar 与 DatasetReleaseRef 已冻结；application/artifact v2 仍待完成 |
+| Core domain contracts | Done / Partial extension | market series、交易日历、因果周期 bar、DatasetReleaseRef 与 CORE-05A application boundary 已冻结；CORE-05B/artifact v2 仍待完成 |
 | Stable identity | Done | canonical SHA-256 experiment/run identity |
 | Core unit tests | Done | 身份稳定性、时区、split、因果约束 |
 | Versioned config loader | Done | YAML schema version、strict validation |
@@ -39,9 +39,9 @@
 | Metrics v1 | Done | Total/CAGR/Vol/Sharpe/MaxDD、显式 undefined/failure、输入一致性与破产吸收态；PR #38 |
 | Causal weekly/monthly bars | Done | 显式 verified-schedule boundary、完整/partial/missing 三态、截断不变；PR #37 |
 | Fixture strategy pack | Done | S4/S2/S3/S1 与 S5 signal-only 已合并（PR #39/#41/#43/#45/#49）；S5 不宣称多资产执行 |
-| Experiment service/CLI | Blocked / Design | Issue #17；fixture-only，等待 application/artifact/fixture 契约冻结 |
+| Experiment service/CLI | Blocked / Design | Issue #17；CORE-05A/ADR-0012 已完成，fixture-only run 仍等待 CORE-06 与 SW-03 |
 | 真实市场数据准入 | Blocked | AkShare 美股历史缺口；Tushare 无美股权限；尚无 Gold dataset |
-| S-5.6 integration train | In progress | DATA-01、A3、CORE-03、QF-01/02、Metrics、artifact inspection 与 SW02 已合并；当前聚焦 CORE-05/06、SW-03 与 A4 design |
+| S-5.6 integration train | In progress | CORE-05A 已随 PR #61 合并；当前先修 #63 Decimal identity，审查 SW-03，并冻结 CORE-06 Metrics/artifact v2 |
 
 ## 3. Milestone 0 — Foundation
 
@@ -236,14 +236,15 @@ Exit criteria：Agent 无法绕过 locked test、hard gate 或人工 Promotion�
 
 关键路径按以下顺序处理：
 
-1. `CORE-05 application command/handler/composition contract`；
-2. `#27 SW-03 FixtureBundle`（A3 ordered normalized identity 已冻结，可与 CORE-05 并行）；
-3. `CORE-06 artifact v2 lineage/metrics contract`；
-4. `#17 M1-08 fixture-only experiment service / CLI`；
-5. `#29 A4 verified DatasetRelease factory/store + authoritative calendar resolver`；
-6. 真实数据 application preflight（另依赖 A4；adjusted/total-return 还依赖 CA-01）。
+1. `#63/#64 exact Decimal identity`（SW-03 的 normalized hash 前置修复）；
+2. `#27/#62 SW-03 FixtureBundle`；
+3. `#66 CORE-06 rational-return Metrics v2 + artifact v2 lineage`；
+4. `CORE-05B registry-backed fixture run handler`；
+5. `#17 M1-08 fixture-only CLI/composition`；
+6. `#29 A4 verified DatasetRelease factory/store + authoritative calendar resolver`；
+7. 真实数据 application preflight（另依赖 A4；adjusted/total-return 还依赖 CA-01）。
 
-已完成的并行基础：DATA-01/A3、CORE-03、#22 causal week/month bars、#23 Metrics v1、#24 verified artifact inspection、#30 五策略 fixture reference pack，以及 #26 SW02。当前可并行工作为：CORE-05/06、#27 FixtureBundle、#29 A4 design、#5 QQQ/DIA 冲突证据与 #25 公司行动 contract/design。#17 application/CLI 仍等待 CORE-05/06 与 FixtureBundle；#28 是增量独立 QA。完整 Owner、文件边界和 merge train 见 `COLLABORATION_SCOPE.md`；实时 head SHA 与 blocker 以 #14 为准。
+已完成的并行基础：DATA-01/A3、CORE-03、CORE-05A、#22 causal week/month bars、#23 Metrics v1、#24 verified artifact inspection、#30 五策略 fixture reference pack，以及 #26 SW02。当前可并行工作为：#63 Decimal identity 修复、#27 FixtureBundle、#66 CORE-06 design、#29 A4 design、#5 QQQ/DIA 冲突证据与 #25 公司行动 contract/design。#17 application/CLI 仍等待 CORE-05B/06 与 FixtureBundle；#28 是增量独立 QA。完整 Owner、文件边界和 merge train 见 `COLLABORATION_SCOPE.md`；实时 head SHA 与 blocker 以 #14 为准。
 
 ## 13. 已确认的产品与工程决策
 
