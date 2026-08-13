@@ -118,12 +118,38 @@ def test_duplicate_json_keys_and_invalid_document_types_fail_closed() -> None:
         b'{"manifest_schema_version":"fixture-manifest-v1","manifest_schema_version":',
         1,
     )
-    with pytest.raises(FixtureIntegrityError, match="duplicate"):
+    with pytest.raises(FixtureIntegrityError, match="integrity validation"):
         load_fixture_manifest(duplicated)
     with pytest.raises(FixtureIntegrityError, match="UTF-8"):
         load_fixture_manifest(123)  # type: ignore[arg-type]
-    with pytest.raises(FixtureIntegrityError, match="size"):
+    with pytest.raises(FixtureIntegrityError, match="integrity validation"):
         load_fixture_manifest(b"")
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        b'{"token.super-secret":1,"token.super-secret":2}',
+        b'{"value":"SUPERSECRET"',
+        b'{"manifest_schema_version":"fixture-manifest-v1",'
+        b'"bundle":{"fixture_id":"SUPERSECRET"}}',
+        "\ud800SUPERSECRET",
+    ],
+)
+def test_untrusted_manifest_failures_do_not_expose_raw_input(
+    document: str | bytes,
+) -> None:
+    with pytest.raises(
+        FixtureIntegrityError,
+        match=r"^fixture manifest failed integrity validation$",
+    ) as captured:
+        load_fixture_manifest(document)
+
+    error = captured.value
+    assert "SUPERSECRET" not in str(error)
+    assert "token.super-secret" not in str(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None
 
 
 @pytest.mark.parametrize("field", ["bundle_content_hash", "manifest_content_hash"])
