@@ -123,7 +123,11 @@ def test_hand_calculated_metrics_and_exact_rational_returns() -> None:
     assert result.max_drawdown.value == Decimal("-0.1")
     assert result.metric_input_content_hash == source.content_hash
     assert source.content_hash == "9edd2ff44abac33ef5d7a5d8c93189ead86fa2b84f2d446d559ac1067bbf4cc9"
-    assert result.content_hash == "776a97a44552a159ae8ba33ed464acb8b2fef2b7269b86c4af3a08c109744d34"
+    expected_set_hash = {
+        "2.5.1": "e4a24a9ed7bf396334afa4a8ed4387e58a116dab54b107ce891737b48ea4716a",
+        "4.0.0": "776a97a44552a159ae8ba33ed464acb8b2fef2b7269b86c4af3a08c109744d34",
+    }
+    assert result.content_hash == expected_set_hash[result.calculator.backend_version]
 
 
 def test_ddof_and_risk_free_change_the_declared_calculation() -> None:
