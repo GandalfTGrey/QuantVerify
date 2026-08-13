@@ -1,6 +1,6 @@
 # ADR-0013：可重放 Metrics v2 与 Fixture Run Artifact v2
 
-- Status: Accepted; binary64 evidence projection amendment under review
+- Status: Accepted (binary64 evidence projection amended 2026-08-13)
 - Date: 2026-08-13
 - Owner / Reviewer: S-5.6 / Dev-Lead、Q-Lead、independent architecture/QA
 - Depends on: ADR-0003, ADR-0008, ADR-0012
