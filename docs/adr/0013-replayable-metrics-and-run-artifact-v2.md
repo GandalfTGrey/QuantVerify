@@ -202,6 +202,12 @@ JSON 完整验证、重建 DTO 后，必须以同一 profile 重新序列化并�
 或尾随字节不同均是 noncanonical。CORE-06A/B 必须为 MetricInputV2、MetricSetV2、evidence 和 manifest 各固定
 至少一个完整 canonical bytes/SHA-256 golden，并在 Python 3.11/3.12/3.13 上逐字一致。
 
+MetricInputV2 与 MetricSetV2 的 standalone canonical loader 属于 CORE-06A；evidence、manifest 和 version
+dispatcher loader 属于 CORE-06B。standalone MetricSetV2 只表示带完整 identity 的确定性结果 DTO，不是
+“calculator-issued”证明；不得加入公开可重算 checksum 或进程私有 seal 冒充来源认证。CORE-06B 必须携完整
+MetricInputV2 与 calculator ref 重算 MetricSetV2，并将完整 canonical DTO 逐字段、逐 byte 比对后才可签发
+verified evidence。
+
 ### 6. Manifest v2 与 v1 dispatcher
 
 `run-artifact-manifest-v2` 记录 run/experiment/spec id、v2 artifact ref、runtime、created-at UTC observation
@@ -283,7 +289,10 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
 5. 首 session target/trade、非 flat opening point 或 first point != initial cash 均零写入失败；
 6. bar/target/point/trade/metric row 缺失、额外、重排、timestamp/asset 变化均拒绝或改变 identity；
 7. good MetricSet + wrong MetricInput/calculator/result 无法构造 trusted evidence；
-8. unsafe top/nested `model_copy()` 在 id、serializer、handler、store loader 四个边界拒绝；
+8. unsafe top/nested `model_copy()` 若破坏 schema、资源界限或交叉字段约束，必须在 id、serializer、handler、
+   store loader 四个边界拒绝；若变更后仍是 schema-valid detached DTO，则其 canonical bytes/content hash 必须
+   改变，但它不能仅凭自洽性获得 trusted authority。只有 handler/store loader 从完整 evidence 重跑已注册
+   strategy、engine 和 Metrics v2 calculator 并逐字段相等后，才可晋升为 verified artifact；
 9. v1 golden manifest/result 仍逐 byte verified；unknown v2、moved manifest、noncanonical JSON、duplicate key、
    path escape、latest 和 self-consistent detached DTO 均不获得 verified authority；
 10. publication 在 8 路相同/不同内容并发、hostile filesystem nodes、fd/close/fsync/link/cleanup failures 下
