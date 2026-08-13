@@ -316,6 +316,15 @@ def test_backend_and_unsafe_calculator_ref_fail_closed() -> None:
     with pytest.raises(MetricV2ContractError, match="calculation input"):
         calculate_metric_set_v2(source, calculator=unsafe)
 
+    other_supported = next(
+        version
+        for version in ("2.5.1", "4.0.0")
+        if version != decimal.__libmpdec_version__
+    )
+    mismatched = MetricCalculatorRef(backend_version=other_supported)
+    with pytest.raises(MetricV2ContractError, match="calculation input"):
+        calculate_metric_set_v2(source, calculator=mismatched)
+
 
 def test_unsafe_schedule_and_output_cannot_cross_identity_boundaries() -> None:
     sessions = (date(2024, 1, 2), date(2025, 1, 1))

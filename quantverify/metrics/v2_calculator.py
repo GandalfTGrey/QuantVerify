@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 from decimal import (
     ROUND_HALF_EVEN,
     Clamped,
@@ -54,6 +55,8 @@ def calculate_metric_set_v2(
         ref = MetricCalculatorRef.model_validate(
             (calculator or MetricCalculatorRef.baseline()).model_dump(mode="python")
         )
+        if ref.backend_version != decimal.__libmpdec_version__:
+            raise ValueError("calculator backend does not match the runtime")
     except (AttributeError, TypeError, ValueError, ValidationError):
         failed = True
     if failed or validated is None or ref is None:
