@@ -35,7 +35,9 @@ calculator 与 identity namespace。
 `MetricInputV2` 必须绑定：
 
 - 固定 `metric-input-v2` schema；
-- calendar id/version、return basis、annualization、strict non-negative ddof 和 risk-free policy；
+- `frequency=DAY`，以及完整、重验证的 `SessionSchedule`（含完整 `CalendarArtifactRef`、requested
+  start/end、ordered sessions、schedule id/content hash）；
+- return basis、annualization、strict non-negative ddof 和 risk-free policy；
 - `opening_equity_convention=first_close_flat-v1`；
 - 按 session 严格递增且至少两个元素的完整 equity observations；
 - 由这些 equity **精确派生**的 `RationalReturnObservation`；
@@ -54,7 +56,12 @@ adjusted exponent 绝对值不超过 1000；每个 rational numerator/denominato
 最多 10000 个 equity/return/target/point/trade rows，单个 canonical evidence JSON 最大 32 MiB。超限在
 hash、calculator 或 persistence 前使用固定 typed error fail closed。
 
-输入 content identity 覆盖完整有序 equity、完整 rational returns、全部 policy 和 derivation version；
+fixture v2 的 MetricInput 不接受 detached calendar id/version 字符串，也不允许从 equity rows 自举 schedule。
+它必须消费 SW-03 manifest 中经过完整重验证的 schedule；frequency 固定为 DAY。equity observation 的
+session/count 必须逐项、逐序等于 schedule 的全部 sessions，并且 observation timestamp/availability 证据须由
+evidence 层对应的完整 result points/bars 交叉验证。MetricInput content identity 覆盖 frequency、完整 calendar
+artifact、schedule requested range、ordered sessions、schedule id/content hash、完整有序 equity、完整 rational
+returns、全部 policy 和 derivation version；
 Decimal identity 使用明确 payload：零恒为字符串 `0`；非零为 sign、删除 coefficient 末尾零后的十进制
 digits、同步增加后的 exponent。它不调用 `normalize()`，等值 scale 与 signed zero 收敛。
 
@@ -74,8 +81,10 @@ digits、同步增加后的 exponent。它不调用 `normalize()`，等值 scale
 `InvalidOperation/FloatOperation/DivisionByZero/Overflow=true`、
 `Underflow/Subnormal/Inexact/Rounded/Clamped=false`。每次计算都从该完整 record 新建 context 并
 `clear_flags()`；不得复制宿主 flags/traps。numeric backend id/version 也进入 calculator ref；v2 baseline
-是 `python-decimal/libmpdec` 与项目声明支持的 backend version range，跨 backend 的一致性必须由 golden
-确认，不能仅凭同 calculator label 假定。
+是 `backend_id=python-decimal/libmpdec`，`backend_version` 逐字取运行时公开的
+`decimal.__libmpdec_version__`。calculator implementation registry 必须维护经过 review 的 exact version
+allowlist；每个被允许版本都要通过同一组 identity/metric golden matrix。未知版本 fail closed，不能用 semver
+范围、自由文本标签或仅凭同 calculator id 假定兼容。
 
 v2 baseline 为 precision 34、`ROUND_HALF_EVEN`，并在每次计算的 `localcontext()` 内显式设置全部
 字段；不得读取或继承宿主的 precision、rounding 或 traps。Total return 和 MaxDD 从 equity 计算；
@@ -134,6 +143,13 @@ CORE-05B 只有在以下条件全部成立时，才能使用 `first_close_flat-v
 spec consumed-session identity、cost bps、initial cash 与 metric policy 都分别进入 evidence identity；不能用
 一句 DTO equality 或 generic ref 替代。
 
+两个 implementation registry 都固定使用 `implementation-registry-v1` schema。`code_hash` 是 release/build
+时对 registry 条目所列、按 POSIX 相对路径逐字排序的 UTF-8 Python source bytes 计算的 SHA-256：payload 依次为
+每个 path 的 UTF-8 byte length、path bytes、content byte length、content bytes；不得依赖 checkout 绝对路径、
+mtime、wheel location 或动态源码发现。受支持 path allowlist 本身属于 registry entry 并进入 entry identity。
+wheel build 必须生成并打包已审 registry；运行时只验证已安装 bytes 与 pinned hash，不扫描新 module、不动态
+import 任意名称，也不允许调用方填写新 code hash。
+
 Validator 必须证明：spec 与 manifest 的 fixture/dataset/content/schedule identities 一致；bars、targets、
 points、trades 的 asset/session/timestamps 一致；result 的 initial cash/costs 与 spec 一致；metrics equity
 逐项等于 result points；全部派生 id/hash 可重算。任一 row 的缺失、增加、重排或修改都改变 artifact
@@ -163,6 +179,15 @@ v1 loader、v1 bytes、v1 canonical path 和 `VerifiedRunArtifact` 保持兼容�
 path/hash/schema 验证；envelope 不能改写或重新序列化后再交给 loader。v1 可调用既有
 `inspect_reference_result()`，但其 trust scope 仍是 artifact-v1 integrity-only，且不宣称具备 v2 hostile-FS
 hardening；v2 使用 hardened regular-file/no-follow reader。URL decode、version fallback 和未知字段均拒绝。
+
+v2 dispatcher 的不可信输入资源边界固定如下：manifest canonical bytes 最多 2 MiB、JSON nesting depth 最多
+32 层；evidence canonical bytes 沿用 32 MiB 上限。reader 必须先以 no-follow regular-file descriptor 打开，
+用 `fstat` 验证类型与大小，再执行 bounded read；超限时不得先把完整文件读入内存。进入 `json.loads` 前，必须
+使用字符串/escape-aware 的单遍扫描器验证 nesting 上限（不能简单统计括号字符）；随后再做 UTF-8、duplicate-key、
+canonical JSON、schema 和 hash 校验。空文件、short/extra read、非法 UTF-8、malformed JSON、duplicate key、
+depth overflow、unknown field、Pydantic validation、`RecursionError` 及 reader/close failure 均映射为固定 typed
+integrity error；公开 `str/args/cause/context/notes` 不得携带原始路径、JSON key/value 或 bytes。未知版本也必须在
+同一受限 envelope 边界内拒绝，不能先无限制解析。
 
 v2 的两个相对路径是协议的一部分，只能由以下纯函数生成：
 
@@ -205,6 +230,12 @@ link/fsync 失败时可以留下无 manifest 引用、不可被 inspector 发现
 receipt。只有 verified manifest 才使 content 成为 trusted run artifact；不虚构跨两个文件的 filesystem
 transaction。orphan cleanup 是后续维护工具，不参与科学 identity。
 
+durability 顺序也是协议：content 临时文件写完后 `fsync(file)`，hard-link 到 canonical content path 后
+`fsync(content parent directory)`；manifest 临时文件同样 `fsync(file)`，link 后
+`fsync(manifest parent directory)`。只有最后一次 directory fsync 成功、重新 verified read 得到同一
+manifest/evidence 后才能返回 receipt。任一步失败均执行受控 cleanup，保留 primary error，不允许 cleanup error
+覆盖它。
+
 ## Required Black-box Gates
 
 1. `10300 -> 10400` 等循环小数收益无需容差即可精确 replay；
@@ -225,6 +256,8 @@ transaction。orphan cleanup 是后续维护工具，不参与科学 identity。
 13. 10000-row/32MiB/Decimal/rational bit limits 的边界内通过、边界外固定 typed fail closed。
 14. v2 evidence/manifest 的错误但自洽路径变体（目录、hash 分片、run/evidence/manifest hash、UTC stamp、
     扩展名）均拒绝；等价 UTC instant 只生成同一规范 stamp，非法日期或时间不得通过。
+15. manifest 在 2 MiB 与 nesting 32 的边界内通过，越界、深层嵌套、malformed/duplicate/unknown JSON、
+    short read 和 hostile regular-file nodes 均固定 typed、无输入泄漏地拒绝；evidence 32 MiB 边界同样验证。
 
 ## Deferred / Non-goals
 
