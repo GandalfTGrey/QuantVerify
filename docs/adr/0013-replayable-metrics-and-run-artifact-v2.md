@@ -184,7 +184,9 @@ JSON，不替代未来真实数据的 Parquet/DuckDB artifact 设计。
 `canonicalize_v2()` 将已验证 DTO 转成只含 JSON object/array/string/integer/boolean/null 的 payload；root 必须是 object，mapping key
 必须是 string，tuple/sequence 转为 array。每个 datetime wire value 必须是 aware instant 转 UTC 后严格以
 `%Y-%m-%dT%H:%M:%S.%fZ` 输出的 ASCII string，始终包含六位微秒；parser 要求真实日历/时分秒并逐字
-round-trip，拒绝其他 offset、`+00:00`、小写 `z`、缺失/不同小数精度或等价替代拼写。Decimal
+round-trip，拒绝其他 offset、`+00:00`、小写 `z`、缺失/不同小数精度或等价替代拼写。每个纯 date wire
+value 必须是严格 ASCII `%Y-%m-%d` string，parser 要求真实 Gregorian calendar 并逐字 round-trip；拒绝
+datetime/time、compact/locale/ordinal/epoch-day 或其他等价日期拼写。Decimal
 必须先转为本 ADR 定义的 `decimal-value-v1` object，禁止裸 float 与非有限数。该规则递归覆盖 evidence 中的
 **每一个** Decimal，包括 FixtureRunSpec initial cash/cost bps、TargetPosition、ReferenceResult 的 price/quantity/
 cash/equity/trade cost，以及 MetricInput/MetricSet；不能只处理指标字段，也不能直接沿用项目 generic
@@ -298,8 +300,8 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
     都改变 code hash，未声明项目内 import/resource、动态 import、缺失 source 或仅 `.pyc` 的环境不得生成或重放
     verified evidence。
 17. MetricInputV2、MetricSetV2、evidence 和 manifest 的 canonical JSON golden 都在 Python 3.11/3.12/3.13
-    逐 byte/hash 一致；datetime offset/`+00:00`/精度替代、key order、whitespace、Unicode escape/normalization、
-    非法 surrogate、integer representation 或尾随字节变化均拒绝。CAGR elapsed-days golden 必须证明只使用
+    逐 byte/hash 一致；datetime offset/`+00:00`/精度替代、date compact/ordinal/datetime 冒充、key order、
+    whitespace、Unicode escape/normalization、非法 surrogate、integer representation 或尾随字节变化均拒绝。CAGR elapsed-days golden 必须证明只使用
     `last_session - first_session` 的日历日差。
 
 ## Deferred / Non-goals
