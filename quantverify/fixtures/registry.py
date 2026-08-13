@@ -49,6 +49,7 @@ def load_fixture_manifest(document: str | bytes) -> LoadedFixture:
         UnicodeEncodeError,
         UnicodeDecodeError,
         json.JSONDecodeError,
+        RecursionError,
         ValidationError,
         TypeError,
         ValueError,
