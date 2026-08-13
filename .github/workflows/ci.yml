@@ -72,6 +72,7 @@ jobs:
               "quantverify/data/providers/__init__.py",
               "quantverify/engines/__init__.py",
               "quantverify/features/__init__.py",
+              "quantverify/implementation_registry/__init__.py",
               "quantverify/metrics/__init__.py",
               "quantverify/research/__init__.py",
               "quantverify/research/frequency/__init__.py",
@@ -109,6 +110,7 @@ jobs:
               "quantverify.data.providers",
               "quantverify.engines",
               "quantverify.features",
+              "quantverify.implementation_registry",
               "quantverify.metrics",
               "quantverify.research",
               "quantverify.research.frequency",
@@ -124,4 +126,8 @@ jobs:
                       f"{package_name} leaked outside smoke-venv site-packages: {module_path}"
                   )
               print(f"{package_name}: {module_path}")
+          from quantverify.implementation_registry import builtin_implementation_registry
+
+          builtin_implementation_registry().verify_all()
+          print("implementation registry: installed source closure verified")
           PY
