@@ -223,6 +223,8 @@ Corporate-action window 与 adjusted-return comparison 保留 registry 扩展点
 - normalized rows、normalizer、policy 内容、calendar session set 的任何科学变化都会改变报告 identity；
 - unknown normalized schema fail closed，而不是静默 PASS；
 - 后续 A4 `DatasetRelease` 只有在 `QualitySuite.verify_report(...)` 对完整输入闭包重放成功后，才可以消费其返回的 range eligibility 和 immutable scientific input refs；A4 无需自行重新解释 raw findings，但不得绕过 replay gate；
+- `normalized-bar-v1` 在 A3 identity/evaluation 边界只接受最多 64 位有效数字、非零值 adjusted exponent 绝对值不超过 1000 的有限 Decimal。超出该研究数据域必须在生成 report 前 fail closed；此前 ambient Decimal context 下对超长系数或极端 exponent 产生的 hash/比较结果不构成受支持的历史 identity。普通行情数值的既有 report identity 不变；
+- cross-source bps 阈值分类使用精确有理数交叉比较；展示性 bps 数值才使用 suite 固定的 Decimal context。宿主 precision、rounding 与 traps 不得改变 finding/status/report identity；
 - 报告模型和测试数量增加，但换来可追溯、可重算和可扩展的数据质量语义。
 
 ## Non-goals

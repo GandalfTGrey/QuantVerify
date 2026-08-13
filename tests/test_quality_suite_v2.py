@@ -381,6 +381,62 @@ def test_cross_source_evidence_uses_one_fixed_decimal_context() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("right", "expected_status"),
+    [
+        ("2000.9999999999999999999999999999999999999999", CheckStatus.PASS),
+        ("2001", CheckStatus.PASS),
+        ("2001.0000000000000000000000000000000000000001", CheckStatus.WARNING),
+        ("2005.01", CheckStatus.WARNING),
+        ("2010.04", CheckStatus.FAIL),
+    ],
+)
+def test_cross_source_thresholds_use_exact_rational_comparison(
+    right: str,
+    expected_status: CheckStatus,
+) -> None:
+    session = date(2026, 1, 2)
+    left = bar(session.isoformat(), close="1999")
+    right_bar = bar(session.isoformat(), close=right)
+    report = evaluate(
+        [source("source_a", "a", "b", [left]), source("source_b", "d", "e", [right_bar])],
+        [session],
+        start=session,
+        end=session,
+    )
+    cross_source = next(
+        result for result in report.check_results if result.check_id == "cross_source_ohlc"
+    )
+    assert cross_source.status is expected_status
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        Decimal("1E+1001"),
+        Decimal("1E-1001"),
+        Decimal("1." + "1" * 64),
+    ],
+)
+def test_quality_decimal_domain_rejects_unbounded_values_without_overflow(
+    value: Decimal,
+) -> None:
+    session = date(2026, 1, 2)
+    extreme = bar(session.isoformat()).model_copy(
+        update={"open": value, "high": value, "low": value, "close": value}
+    )
+    with pytest.raises(
+        DataQualityError,
+        match="quality source rows cannot be deterministically identified",
+    ):
+        evaluate(
+            [source("source_a", "a", "b", [extreme])],
+            [session],
+            start=session,
+            end=session,
+        )
+
+
 def test_normalizer_version_changes_report_identity() -> None:
     session = date(2026, 1, 2)
     bars = [bar(session.isoformat())]

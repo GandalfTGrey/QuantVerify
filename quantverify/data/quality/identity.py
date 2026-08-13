@@ -14,6 +14,8 @@ from quantverify.core.identity import canonicalize
 from quantverify.data.models import NormalizedBar
 
 _MAX_FIXED_DECIMAL_CHARACTERS = 4096
+MAX_QUALITY_DECIMAL_DIGITS = 64
+MAX_QUALITY_DECIMAL_ADJUSTED_EXPONENT = 1000
 
 
 def full_content_hash(value: Any) -> str:
@@ -55,7 +57,7 @@ def _quality_number(value: Any) -> Any:
     if isinstance(value, Decimal) and not value.is_finite():
         return {"non_finite_decimal": str(value)}
     if isinstance(value, Decimal):
-        return canonical_decimal(value)
+        return canonical_decimal(require_quality_decimal_domain(value))
     if isinstance(value, float) and not math.isfinite(value):
         return {"non_finite_float": str(value)}
     return canonicalize(value)
@@ -96,6 +98,19 @@ def canonical_decimal(value: Decimal) -> str:
     if len(coefficient) > 1:
         mantissa = f"{mantissa}.{coefficient[1:]}"
     return f"{sign}{mantissa}E{adjusted_exponent:+d}"
+
+
+def require_quality_decimal_domain(value: Decimal) -> Decimal:
+    """Reject finite values outside the bounded A3 normalized-number domain."""
+
+    if not value.is_finite():
+        raise ValueError("quality Decimal must be finite")
+    parts = value.as_tuple()
+    if len(parts.digits) > MAX_QUALITY_DECIMAL_DIGITS:
+        raise ValueError("quality Decimal exceeds the coefficient digit limit")
+    if value and abs(value.adjusted()) > MAX_QUALITY_DECIMAL_ADJUSTED_EXPONENT:
+        raise ValueError("quality Decimal exceeds the adjusted exponent limit")
+    return value
 
 
 def expected_sessions_hash(calendar_id: str, sessions: Sequence[date]) -> str:
