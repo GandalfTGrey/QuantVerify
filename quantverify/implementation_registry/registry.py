@@ -207,6 +207,39 @@ _DISTRIBUTION_PACKAGES = (
 )
 
 
+def is_reviewed_runtime_dependency_cohort(
+    dependencies: tuple[RuntimeDependencyRefV1, ...],
+) -> bool:
+    """Return whether one exact immutable dependency tuple is a reviewed cohort."""
+
+    try:
+        if not isinstance(dependencies, tuple):
+            return False
+        validated = tuple(
+            RuntimeDependencyRefV1.model_validate(item.model_dump(mode="python"))
+            for item in dependencies
+        )
+        if validated != tuple(sorted(validated, key=lambda item: item.package)):
+            return False
+        by_package = {item.package: item.version for item in validated}
+        if len(by_package) != len(validated):
+            return False
+        observed_distributions = tuple(
+            (package, by_package[package]) for package in _DISTRIBUTION_PACKAGES
+        )
+        observed_cohort = (
+            observed_distributions,
+            by_package["python"],
+            by_package["libmpdec"],
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, ValidationError):
+        return False
+    return (
+        set(by_package) == {*_DISTRIBUTION_PACKAGES, "python", "libmpdec"}
+        and observed_cohort in _REVIEWED_RUNTIME_COHORTS
+    )
+
+
 class ImplementationRegistry:
     """Exact resolver whose trust root is the immutable built-in table."""
 
@@ -410,21 +443,7 @@ class ImplementationRegistry:
             )
         )
         dependencies.sort(key=lambda item: item.package)
-        observed_distributions = tuple(
-            (item.package, item.version)
-            for item in dependencies
-            if item.package in _DISTRIBUTION_PACKAGES
-        )
-        python_version = f"{version_info.major}.{version_info.minor}"
-        observed_cohort = (
-            observed_distributions,
-            python_version,
-            __libmpdec_version__,
-        )
-        if (
-            failed
-            or observed_cohort not in _REVIEWED_RUNTIME_COHORTS
-        ):
+        if failed or not is_reviewed_runtime_dependency_cohort(tuple(dependencies)):
             raise ImplementationRegistryIntegrityError(
                 "implementation runtime dependencies are not reviewed"
             ) from None
