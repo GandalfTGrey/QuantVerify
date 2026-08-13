@@ -1,6 +1,6 @@
 # ADR-0013：可重放 Metrics v2 与 Fixture Run Artifact v2
 
-- Status: Accepted
+- Status: Accepted; binary64 evidence projection amendment under review
 - Date: 2026-08-13
 - Owner / Reviewer: S-5.6 / Dev-Lead、Q-Lead、independent architecture/QA
 - Depends on: ADR-0003, ADR-0008, ADR-0012
@@ -136,12 +136,40 @@ CORE-05B 只有在以下条件全部成立时，才能使用 `first_close_flat-v
 
 小型 fixture 的 `fixture-run-evidence-v2` canonical JSON 必须包含并交叉验证：
 
-- experiment id、fixture-run-spec id、run id 和完整 `FixtureRunSpec`；
+- experiment id、fixture-run-spec id、run id 和完整、可逆的
+  `fixture-run-spec-evidence-projection-v1`；
 - 完整、自校验的 SW-03 `FixtureManifest`，而不只是自由填写的 fixture/hash refs；
 - strategy adapter id/version/code hash；
 - 完整有序 `TargetPosition` 和其 content hash；
 - engine id/version/code hash 与完整 `ReferenceResult`；
 - `MetricInputV2`、其 content hash、`MetricCalculatorRef`、`MetricSetV2` 和 metric-set content hash。
+
+`FixtureRunSpec` 本身保持 ADR-0012 的 legacy DTO 与 identity，不做 schema migration。它内嵌的
+`ValidationConfig` 使用 Python binary64 float，而 canonical-json-v1 禁止裸 float；因此 evidence 必须用
+`FixtureRunSpecEvidenceProjectionV1` 一一、可逆地投影完整 spec。projection 必须覆盖原 spec 的每个语义字段，
+唯一替换是把 `ValidationConfig` 的 train、validation、test 三个 fraction 分别编码为
+`binary64-value-v1` object，精确形状为
+`{"schema_version":"binary64-value-v1","bits":"<16 lowercase hex>"}`。bits 是该 Python float
+按 IEEE-754 binary64 big-endian 八字节的逐字表示。decoder 只接受恰好 `schema_version` 与 `bits` 两个 key、
+固定 schema literal、16 位小写十六进制、finite nonzero value，并要求 decode 后重新 encode 逐字相等；
+JSON number/string、额外 key、大小写或长度
+替代、NaN、infinity、positive zero 与 negative zero 全部拒绝。
+
+projection factory 必须先 fresh revalidate legacy `FixtureRunSpec`，projection loader 必须反向重建完整
+legacy DTO、再次 fresh validate，并要求重建后的 `experiment_id` 与 `fixture_run_spec_id` 等于 evidence
+携带的派生身份。任何 projection 字段或 binary64 bit 改变都必须改变 evidence bytes/hash，并且不能在身份
+不匹配时通过。该 projection 只是 legacy wire bridge：不得修改 `ValidationConfig`、`ExperimentConfig`、
+global identity 或既有 ID golden，也不得把 generic float 支持加入 canonical-json-v1。
+
+targets 的独立 identity 固定为 `fixture-target-positions-v1`：preimage 是 canonical-json-v1 编码的
+`{"schema_version":"fixture-target-positions-v1","targets":[...]}`，其中 targets 保持 evidence 中的完整
+有序顺序；`targets_content_hash` 是该 bytes 的完整 SHA-256。禁止对裸 tuple、排序后的 targets 或 generic
+项目 identity helper 取 hash。
+
+CORE-06B2 不包含 observation manifest/runtime，因此它只能返回完整、确定性地 replayed evidence，不能单独
+授予 trusted run artifact authority，也不能独立证明 `run_id == fixture_run_spec.run_id(runtime)`。CORE-06B3
+必须从 manifest 的 fresh runtime 重算该等式并完成 manifest/evidence/run 三方绑定后，才能把 store-backed
+读取结果标记为 verified artifact。
 
 `StrategyImplementationRefV1` 和 `EngineImplementationRefV1` 都包含 strict id、version、code hash，并
 由显式静态 registry exact resolve。strategy ref 必须逐字段匹配 `ExperimentConfig.strategy`；engine ref
@@ -328,6 +356,13 @@ manifest/evidence 后才能返回 receipt。任一步失败均执行受控 clean
     逐 byte/hash 一致；datetime offset/`+00:00`/精度替代、date compact/ordinal/datetime 冒充、key order、
     whitespace、Unicode escape/normalization、非法 surrogate、integer representation 或尾随字节变化均拒绝。CAGR elapsed-days golden 必须证明只使用
     `last_session - first_session` 的日历日差。
+18. legacy `ValidationConfig(0.6, 0.2, 0.2)` 的完整 spec projection bytes/hash 跨 Python 3.11/3.12/3.13
+    固定；三个 binary64 字段的任一 bit 改变、大小写/短 hex/额外 key、裸 JSON float/string、NaN/infinity/
+    negative-zero、projection 与 fresh legacy experiment/spec identity 不一致均拒绝，同时既有 legacy
+    experiment/spec ID golden 保持不变。
+19. targets hash 只接受 `fixture-target-positions-v1` 固定 object preimage；删增、重排或修改任一完整 target
+    都改变 hash，自洽重哈希但不能通过 registered strategy replay。B2 replayed evidence 不得冒充已完成 runtime/
+    manifest 三方绑定的 verified run artifact。
 
 ## Deferred / Non-goals
 
