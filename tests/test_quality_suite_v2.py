@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
-from decimal import Decimal, localcontext
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, localcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -342,6 +342,43 @@ def test_scientific_decimal_identity_normalizes_scale_zero_and_extreme_exponents
     assert canonical_decimal(Decimal("1E+10000")) == "1E+10000"
     assert canonical_decimal(Decimal("1.00E+10000")) == "1E+10000"
     assert canonical_decimal(Decimal("1E-10000")) == "1E-10000"
+
+
+def test_cross_source_evidence_uses_one_fixed_decimal_context() -> None:
+    session = date(2026, 1, 2)
+    sources = [
+        source("source_a", "a", "b", [bar(session.isoformat())]),
+        source(
+            "source_b",
+            "d",
+            "e",
+            [bar(session.isoformat(), close="100.105")],
+        ),
+    ]
+
+    reports = []
+    for precision, rounding in ((2, ROUND_DOWN), (10, ROUND_UP), (50, ROUND_DOWN)):
+        with localcontext() as context:
+            context.prec = precision
+            context.rounding = rounding
+            reports.append(
+                evaluate(
+                    sources,
+                    [session],
+                    start=session,
+                    end=session,
+                )
+            )
+
+    assert all(report == reports[0] for report in reports[1:])
+    assert all(report.report_id == reports[0].report_id for report in reports[1:])
+    cross_source = next(
+        result for result in reports[0].check_results if result.check_id == "cross_source_ohlc"
+    )
+    assert cross_source.status is CheckStatus.WARNING
+    assert cross_source.metrics["max_difference_bps"] == (
+        "10.49449039254391444491641888008795"
+    )
 
 
 def test_normalizer_version_changes_report_identity() -> None:

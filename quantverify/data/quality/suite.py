@@ -5,7 +5,15 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import (
+    MAX_EMAX,
+    MIN_EMIN,
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    InvalidOperation,
+    localcontext,
+)
 from itertools import combinations, pairwise
 from typing import Any
 
@@ -37,6 +45,14 @@ from quantverify.data.quality.provenance import evidence_ref_from_verified_captu
 
 _CHECK_VERSION = "2"
 _PRICE_FIELDS = ("open", "high", "low", "close")
+_QUALITY_DECIMAL_CONTEXT = Context(
+    prec=34,
+    rounding=ROUND_HALF_EVEN,
+    Emin=MIN_EMIN,
+    Emax=MAX_EMAX,
+    capitals=1,
+    clamp=0,
+)
 
 
 class QualitySuite:
@@ -1033,10 +1049,11 @@ class QualitySuite:
 
     @staticmethod
     def _symmetric_difference_bps(left: Decimal, right: Decimal) -> Decimal | None:
-        denominator = (abs(left) + abs(right)) / Decimal("2")
-        if denominator == 0:
-            return None
-        return abs(left - right) / denominator * Decimal("10000")
+        with localcontext(_QUALITY_DECIMAL_CONTEXT):
+            denominator = (abs(left) + abs(right)) / Decimal("2")
+            if denominator == 0:
+                return None
+            return abs(left - right) / denominator * Decimal("10000")
 
     @staticmethod
     def _stable_bar_map(bars: Sequence[NormalizedBar]) -> dict[date, NormalizedBar]:
