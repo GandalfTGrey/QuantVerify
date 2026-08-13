@@ -70,7 +70,7 @@ digits、同步增加后的 exponent。它不调用 `normalize()`，等值 scale
 - metric-set schema version。
 
 `decimal-context-v1` 是 calculator ref 的组成部分，必须枚举 `prec=34`、
-`rounding=ROUND_HALF_EVEN`、`Emin`、`Emax`、`capitals=1`、`clamp=0`，以及
+`rounding=ROUND_HALF_EVEN`、`Emin=-999999`、`Emax=999999`、`capitals=1`、`clamp=0`，以及
 `InvalidOperation/FloatOperation/DivisionByZero/Overflow=true`、
 `Underflow/Subnormal/Inexact/Rounded/Clamped=false`。每次计算都从该完整 record 新建 context 并
 `clear_flags()`；不得复制宿主 flags/traps。numeric backend id/version 也进入 calculator ref；v2 baseline
@@ -164,6 +164,26 @@ path/hash/schema 验证；envelope 不能改写或重新序列化后再交给 lo
 `inspect_reference_result()`，但其 trust scope 仍是 artifact-v1 integrity-only，且不宣称具备 v2 hostile-FS
 hardening；v2 使用 hardened regular-file/no-follow reader。URL decode、version fallback 和未知字段均拒绝。
 
+v2 的两个相对路径是协议的一部分，只能由以下纯函数生成：
+
+- evidence content：
+  `artifacts/fixture_run_evidence_v2/<evidence_content_hash[0:2]>/<evidence_content_hash>.json`；
+- observation manifest：
+  `run_manifests_v2/<run_id>/<evidence_content_hash>/<YYYYMMDDTHHMMSSffffffZ>-<manifest_hash>.json`。
+
+`YYYYMMDDTHHMMSSffffffZ` 必须由一个真实、aware 且已经规范为 UTC 的 `created_at` 以
+`%Y%m%dT%H%M%S%fZ` 生成；loader 必须执行真实日历/时分秒解析和逐字 round-trip，不得只检查长度或数字位置。
+manifest 内 v2 artifact ref 的 `kind=fixture_run_evidence`、`schema_version=fixture-run-evidence-v2`，其 URI
+必须逐字等于上述 evidence content path；manifest path 必须同时逐字绑定 `run_id`、
+`evidence_content_hash`、UTC stamp 和 `manifest_hash`。hash 均为 64 位小写十六进制，`run_id` 必须满足冻结
+的 CORE-05A grammar。
+
+两个函数都返回 strict POSIX relative path。每个 segment 必须是规范 ASCII，不允许空 segment、`.`、`..`、
+反斜杠、控制字符、percent encoding、URL scheme、绝对路径或任何大小写形式的 `latest`；dispatcher/store
+不会 URL decode 或 Unicode normalize 后再接受。loader 必须从已验证字段重新计算唯一预期路径并与调用路径
+逐字比较。即使 bytes、hash 和内部字段已被攻击者自洽重算，任何不同目录层级、hash 分片、时间格式、扩展名
+或字段到 segment 的映射也必须拒绝。
+
 ### 7. 发布必须复用 hardened immutable publisher
 
 在实现 v2 store 前，先抽取或复用已经通过 CaptureStore 审计的同目录 staging、fsync、no-overwrite
@@ -203,6 +223,8 @@ transaction。orphan cleanup 是后续维护工具，不参与科学 identity。
 11. full-bundle start/end/count/schedule hash 任一篡改、prefix/suffix omission 均拒绝；
 12. 静态 registry code hash/version 不匹配，以及自洽但未由注册 strategy/engine 重放产生的 evidence 均拒绝；
 13. 10000-row/32MiB/Decimal/rational bit limits 的边界内通过、边界外固定 typed fail closed。
+14. v2 evidence/manifest 的错误但自洽路径变体（目录、hash 分片、run/evidence/manifest hash、UTC stamp、
+    扩展名）均拒绝；等价 UTC instant 只生成同一规范 stamp，非法日期或时间不得通过。
 
 ## Deferred / Non-goals
 
