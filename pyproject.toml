@@ -29,7 +29,7 @@ market-data = [
   "yfinance>=1.0,<2",
 ]
 dev = [
-  "mypy>=1.13,<2",
+  "mypy>=1.13,<3",
   "pytest>=8.3,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.8,<1",
